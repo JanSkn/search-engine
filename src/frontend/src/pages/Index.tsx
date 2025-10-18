@@ -1,0 +1,330 @@
+import { useState, useEffect } from "react";
+import { SearchInput } from "@/components/SearchInput";
+import { SearchResults } from "@/components/SearchResults";
+import { LoadingState } from "@/components/LoadingState";
+import { ErrorState } from "@/components/ErrorState";
+import { useToast } from "@/hooks/use-toast";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import seekrLogo from "@/assets/seekr-logo.png";
+import { mockResults } from "@/mock/searchResults";
+
+interface SearchResult {
+  title: string;
+  url: string;
+  description?: string;
+}
+
+const Index = () => {
+  const [allResults, setAllResults] = useState<SearchResult[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [currentQuery, setCurrentQuery] = useState("");
+  const { toast } = useToast();
+  const [currentText, setCurrentText] = useState("");
+
+  const RESULTS_PER_PAGE = 10;
+
+  const searchTexts = [
+    "recipes...",
+    "coding tutorials...",
+    "travel destinations...",
+    "workout routines...",
+    "news articles...",
+    "product reviews...",
+  ];
+
+  // Read page from URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const page = parseInt(params.get("page") || "1");
+    const query = params.get("q") || "";
+    
+    if (page > 1) setCurrentPage(page);
+    if (query) {
+      setCurrentQuery(query);
+      setHasSearched(true);
+      handleSearch(query);
+    }
+  }, []);
+
+  // Update URL when page changes
+  useEffect(() => {
+    if (hasSearched && currentQuery) {
+      const params = new URLSearchParams();
+      params.set("q", currentQuery);
+      if (currentPage > 1) {
+        params.set("page", currentPage.toString());
+      }
+      window.history.pushState({}, "", `?${params.toString()}`);
+      
+      // Scroll to top when page changes
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [currentPage, hasSearched, currentQuery]);
+
+  // Typing animation effect
+  useEffect(() => {
+    if (hasSearched) return;
+
+    let charIndex = 0;
+    let isDeleting = false;
+    let currentTextIndex = 0;
+    let timeoutId: NodeJS.Timeout;
+
+    const type = () => {
+      const fullText = searchTexts[currentTextIndex];
+
+      if (!isDeleting && charIndex <= fullText.length) {
+        setCurrentText(fullText.substring(0, charIndex));
+        charIndex++;
+        timeoutId = setTimeout(type, 100);
+      } else if (!isDeleting && charIndex > fullText.length) {
+        timeoutId = setTimeout(() => {
+          isDeleting = true;
+          type();
+        }, 2000);
+      } else if (isDeleting && charIndex >= 0) {
+        setCurrentText(fullText.substring(0, charIndex));
+        charIndex--;
+        timeoutId = setTimeout(type, 50);
+      } else if (isDeleting && charIndex < 0) {
+        isDeleting = false;
+        charIndex = 0;
+        currentTextIndex = (currentTextIndex + 1) % searchTexts.length;
+        timeoutId = setTimeout(type, 500);
+      }
+    };
+
+    type();
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [hasSearched]);
+
+  const handleSearch = async (query: string) => {
+    setIsLoading(true);
+    setError(null);
+    setHasSearched(true);
+    setCurrentQuery(query);
+    setCurrentPage(1); // Reset to page 1 on new search
+    setAllResults([]);
+
+    // Scroll to top when searching
+    window.scrollTo({ top: 0, behavior: "smooth" });
+
+    try {
+      const response = await fetch(
+        `https://127.0.0.1:8000/search?q=${encodeURIComponent(query)}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`Search failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      const searchResults = Array.isArray(data) ? data : data.results || [];
+      setAllResults(searchResults);
+
+      if (searchResults.length === 0) {
+        toast({
+          title: "No results found",
+          description: `No results found for "${query}". Try a different search term.`,
+        });
+      }
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "An unknown error occurred while searching";
+
+      console.error("Search error:", errorMessage);
+
+      setError(errorMessage);
+      setAllResults(mockResults);
+
+      toast({
+        title: "Search failed — showing mock results",
+        description: "Backend request failed. Displaying demo data instead.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages) return;
+    setCurrentPage(newPage);
+  };
+
+  // Paginate results
+  const startIndex = (currentPage - 1) * RESULTS_PER_PAGE;
+  const endIndex = startIndex + RESULTS_PER_PAGE;
+  const paginatedResults = allResults.slice(startIndex, endIndex);
+  const totalPages = Math.ceil(allResults.length / RESULTS_PER_PAGE);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = [];
+    const maxVisible = 7;
+
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 4) {
+        for (let i = 1; i <= 5; i++) pages.push(i);
+        pages.push("...");
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 3) {
+        pages.push(1);
+        pages.push("...");
+        for (let i = totalPages - 4; i <= totalPages; i++) pages.push(i);
+      } else {
+        pages.push(1);
+        pages.push("...");
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) pages.push(i);
+        pages.push("...");
+        pages.push(totalPages);
+      }
+    }
+
+    return pages;
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Centered Landing View */}
+      {!hasSearched && (
+        <div className="flex items-center justify-center min-h-screen px-4">
+          <div className="w-full max-w-2xl">
+            {/* Logo/Brand */}
+            <div className="text-center mb-8">
+              <div className="flex items-center justify-center gap-3 mb-2">
+                <img
+                  src={seekrLogo}
+                  alt="Seekr logo"
+                  className="h-20 w-20"
+                />
+                <h1 className="text-7xl font-bold text-primary tracking-tight">
+                  Seekr
+                </h1>
+              </div>
+              <div className="h-6 flex items-center justify-center">
+                <p className="text-muted-foreground text-lg">
+                  search for <span className="text-primary font-medium">{currentText}</span>
+                  <span className="animate-pulse">|</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <SearchInput 
+              onSearch={handleSearch} 
+              isLoading={isLoading}
+              initialValue={currentQuery}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Results View */}
+      {hasSearched && (
+        <div className="py-12 px-4">
+          <div className="container mx-auto max-w-4xl">
+            {/* Compact Logo/Brand */}
+            <div className="text-center mb-8">
+              <div className="flex items-center justify-center gap-3 mb-2">
+                <img
+                  src={seekrLogo}
+                  alt="Seekr logo"
+                  className="h-12 w-12"
+                />
+                <h1 className="text-4xl font-bold text-primary tracking-tight">
+                  Seekr
+                </h1>
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <SearchInput 
+              onSearch={handleSearch} 
+              isLoading={isLoading}
+              initialValue={currentQuery}
+            />
+
+            {/* Loading State */}
+            {isLoading && <LoadingState />}
+
+            {/* Error State */}
+            {error && !isLoading && <ErrorState message={error} />}
+
+            {/* Search Results */}
+            {!isLoading && paginatedResults.length > 0 && (
+              <>
+                <SearchResults results={paginatedResults} />
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="mt-12 mb-8">
+                    <div className="flex items-center justify-center gap-2">
+                      {/* Previous Button */}
+                      <button
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        className="p-2 rounded-lg hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        aria-label="Previous page"
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+
+                      {/* Page Numbers */}
+                      <div className="flex items-center gap-1">
+                        {getPageNumbers().map((page, index) => (
+                          <button
+                            key={index}
+                            onClick={() => typeof page === "number" && handlePageChange(page)}
+                            disabled={page === "..."}
+                            className={`min-w-[40px] h-10 rounded-lg font-medium transition-colors ${
+                              page === currentPage
+                                ? "bg-primary text-primary-foreground"
+                                : page === "..."
+                                ? "cursor-default"
+                                : "hover:bg-accent"
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Next Button */}
+                      <button
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={currentPage === totalPages}
+                        className="p-2 rounded-lg hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        aria-label="Next page"
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                    </div>
+
+                    {/* Results info */}
+                    <p className="text-center text-sm text-muted-foreground mt-4">
+                      Showing {startIndex + 1}-{Math.min(endIndex, allResults.length)} of {allResults.length} results
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Index;
