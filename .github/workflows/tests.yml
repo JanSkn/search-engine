@@ -8,4 +8,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - run: just install-backend
       - run: just test
