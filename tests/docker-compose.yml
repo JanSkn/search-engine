@@ -1,3 +1,6 @@
 services:
   tests:
-    build: .
+    build: 
+      context: ..
+      dockerfile: tests/Dockerfile
+    image: seekr-pytest-ci-env
