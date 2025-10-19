@@ -1,7 +1,7 @@
 name: Code Quality
 on:
   pull_request:
-    branches: [ $default-branch ]
+    branches: [ main ]
 jobs:
   linting:
     runs-on: ubuntu-latest
