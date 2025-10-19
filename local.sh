@@ -1,14 +1,15 @@
 #!/bin/bash
+set -euo pipefail
 
 PIDS=()
 
-poetry run uvicorn src.backend.api.v1.app:app --host 127.0.0.1 --port 8000 "$@" &
+poetry run --directory src/backend uvicorn api.v1.app:app --host 127.0.0.1 --port 8000 "$@" &
 PIDS+=($!)
-echo "Uvicorn server started with PID ${PIDS[-1]}"
+echo "Uvicorn server started with PID ${PIDS[0]}"
 
 npm run dev --prefix src/frontend &
 PIDS+=($!)
-echo "Vite server started with PID ${PIDS[-1]}"
+echo "Vite server started with PID ${PIDS[1]}"
 
 cleanup() {
   echo "Stopping all services..."
@@ -17,3 +18,4 @@ cleanup() {
 }
 
 trap cleanup EXIT
+wait
