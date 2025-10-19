@@ -1,17 +1,19 @@
 name: Code Quality
 on:
   pull_request:
-    branches: [ $default-branch ]
+    branches: [ main ]
 jobs:
   linting:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - run: just test
+      - run: just install-backend
+      - run: just lint
   type_checking:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - run: just install-backend
       - run: just mypy

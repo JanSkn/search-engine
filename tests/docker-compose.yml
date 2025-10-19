@@ -4,3 +4,6 @@ services:
       context: ..
       dockerfile: tests/Dockerfile
     image: seekr-pytest-ci-env
+    volumes:
+          - ../src/backend:/app/src/backend   
+          - ./:/app/tests               

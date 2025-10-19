@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install poetry
 
-WORKDIR /app
+# set workdir to where pyproject.toml is located for poetry
+WORKDIR /app/src/backend
 
 # copy only dependency files first (for caching)
 COPY src/backend/pyproject.toml .
@@ -20,5 +21,6 @@ COPY src/backend/poetry.lock .
 RUN poetry install --no-root
 
 COPY src/backend/ .
+COPY tests/ /app/tests/
 
-CMD ["poetry", "run", "pytest"]
+CMD ["poetry", "run", "pytest", "/app/tests"]

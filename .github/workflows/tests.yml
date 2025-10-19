@@ -1,11 +1,12 @@
 name: Tests
 on:
   pull_request:
-    branches: [ $default-branch ]
+    branches: [ main ]
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - run: just install-backend
       - run: just test
