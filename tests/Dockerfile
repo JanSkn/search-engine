@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 # system dependencies
 # build-essential for packages using c extensions
@@ -6,21 +6,22 @@ FROM python:3.10-slim
 RUN apt-get update && apt-get install -y \
     build-essential \   
     git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install poetry
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
-# set workdir to where pyproject.toml is located for poetry
+# set workdir to where pyproject.toml is located for uv
 WORKDIR /app/src/backend
 
 # copy only dependency files first (for caching)
 COPY src/backend/pyproject.toml .
-COPY src/backend/poetry.lock .
+COPY src/backend/uv.lock .
 
-# install dependencies (no-root so it doesn't try to install the package itself)
-RUN poetry install --no-root
+RUN uv sync
 
 COPY src/backend/ .
 COPY tests/ /app/tests/
 
-CMD ["poetry", "run", "pytest", "/app/tests"]
+CMD ["uv", "run", "pytest", "/app/tests"]

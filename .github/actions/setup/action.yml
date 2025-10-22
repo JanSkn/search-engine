@@ -1,8 +1,13 @@
 runs:
   using: composite
   steps:
-    - name: "Installations"
+    - name: "Install UV"
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+    
+    - name: "Install Just"
       shell: bash
       run: |
-        chmod +x ${{ github.action_path }}/entrypoint.sh
-        ${{ github.action_path }}/entrypoint.sh
+        sudo apt-get update -y
+        sudo apt-get install -y just
