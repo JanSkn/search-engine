@@ -5,7 +5,7 @@ install-frontend:
     cd src/frontend && npm install
 
 install-backend:
-    cd src/backend && poetry install --no-root
+    cd src/backend && uv sync
 
 # install frontend and backend
 install:
@@ -18,14 +18,13 @@ local uvicorn-args="":
 
 lint:
     @echo "Linting with Ruff..."
-    poetry run --directory src/backend ruff check api/ search_engine/
-    poetry run --directory src/backend ruff format --check --diff api/ search_engine/
+    cd src/backend && uv run ruff check api/ search_engine/
+    cd src/backend && uv run ruff format --check --diff api/ search_engine/
 
 mypy:
     @echo "Type checking with MyPy..."
-    poetry run --directory src/backend mypy api/
-    poetry run --directory src/backend mypy search_engine/
+    cd src/backend && uv run mypy api/
+    cd src/backend && uv run mypy search_engine/
 
 test args="":
-    cd tests
     just -f tests/justfile test {{args}}
