@@ -18,7 +18,6 @@ local uvicorn-args="":
 
 lint:
     @echo "Linting with Ruff..."
-    cd src/backend
     cd src/backend && uv run ruff check api/ search_engine/
     cd src/backend && uv run ruff format --check --diff api/ search_engine/
 
