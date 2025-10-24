@@ -1,5 +1,5 @@
 [project]
-name = "seekr"
+name = "search-engine"
 version = "0.1.0"
 description = "Minimal search engine"
 readme = "README.md"
