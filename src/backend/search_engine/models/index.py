@@ -14,13 +14,13 @@ class PostingList(BaseModel):
 
     urls: list[HttpUrl]
     titles: list[str]
-    doc_freq: int # equals length of postings
-    term_frequencies: list[int] 
+    doc_freq: int  # equals length of postings
+    term_frequencies: list[int]
     positions: list[list[int]]
-    postings: list[int] # doc ids
-    skip_pointers: list[dict[int, int]]
+    postings: list[int]  # doc ids
+    skip_pointers: dict[int, int]
 
-    def build_skip_pointers(self) -> None:
+    def build_skip_pointers(self, index: int) -> None:
         n = len(self.postings)
         step = int(sqrt(n)) if n > 0 else 0
 
