@@ -11,7 +11,7 @@ class PostingList(BaseModel):
     def doc_freq(self) -> int:
         return len(self.postings)
 
-    def build_skip_pointers(self) -> None:
+    def build_skip_pointers(self, index: int) -> None:
         n = len(self.postings)
         step = int(sqrt(n)) if n > 0 else 0
 
