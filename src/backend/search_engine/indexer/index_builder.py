@@ -1,15 +1,39 @@
 import gzip
 import json
 import re
-from typing import Iterable, Tuple, Optional
+from typing import Iterable
 
 import spacy
 
 from backend.search_engine.index.inverted_index import InvertedIndex
 from backend.search_engine.models.index import PostingList
+from backend.search_engine.query.query_preprocessing import AND, OR, NOT
+
+KEEP_TOKENS = AND | OR | NOT | {"(", ")"}
+
+# TODO can be different model in build_index
+nlp = spacy.load("en_core_web_sm")
 
 
-def _iter_jsonl(path: str) -> Iterable[Tuple[str, str, str, str]]:
+def lemmatize_search_query(query: str) -> list[str]:
+    result = []
+
+    doc = nlp(query)
+
+    for token in doc:
+        word = token.text
+
+        if word in KEEP_TOKENS:
+            result.append(word)
+            continue
+
+        lemma = token.lemma_.lower()
+        result.append(lemma)
+
+    return result
+
+
+def _iter_jsonl(path: str) -> Iterable[tuple[str, str, str, str]]:
     # yields (docid, url, title, body) from jsonl or jsonl.gz
     opener = gzip.open if path.endswith(".gz") else open
     mode = "rt"
@@ -42,9 +66,9 @@ def _should_keep(tok) -> bool:
 
 def build_index(
     jsonl_path: str,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     lang: str = "en",
-    spacy_model: Optional[str] = "en_core_web_sm",
+    spacy_model: str | None = "en_core_web_sm",
     use_lemma: bool = True,
 ) -> InvertedIndex:
     # loads docs from jsonl, tokenizes, and builds an inverted index with positions
@@ -58,7 +82,7 @@ def build_index(
     for doc_id, (docid, url, title, body) in enumerate(_iter_jsonl(jsonl_path)):
         if limit is not None and doc_id >= limit:
             break
-        
+
         inv._doc_store[doc_id] = url
 
         # build text to tokenize
@@ -88,7 +112,7 @@ def build_index(
                     term_frequencies=[1],
                     positions=[[pos]],
                     postings=[doc_id],
-                    skip_pointers={}
+                    skip_pointers={},
                 )
                 inv._index[term] = pl
             else:
@@ -107,3 +131,6 @@ def build_index(
 
     inv.finalize()
     return inv
+
+
+lemmatize_search_query("A AND (b or c)")

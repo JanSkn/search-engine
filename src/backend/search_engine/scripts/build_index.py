@@ -6,10 +6,16 @@ from ..indexer.index_builder import build_index
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="build inverted index with positions")
-    parser.add_argument("--corpus", type=str, required=True, help="path to tsv gz or jsonl")
+    parser.add_argument(
+        "--corpus", type=str, required=True, help="path to tsv gz or jsonl"
+    )
     parser.add_argument("--limit", type=int, default=None, help="optional doc limit")
-    parser.add_argument("--lang", type=str, default="en", help="language code for tokenizer")
-    parser.add_argument("--out", type=str, default="index.pkl", help="path to output pickle")
+    parser.add_argument(
+        "--lang", type=str, default="en", help="language code for tokenizer"
+    )
+    parser.add_argument(
+        "--out", type=str, default="index.pkl", help="path to output pickle"
+    )
     args = parser.parse_args()
 
     docs = stream_documents(args.corpus)
