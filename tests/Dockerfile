@@ -24,4 +24,6 @@ RUN uv sync
 COPY src/backend/ .
 COPY tests/ /app/tests/
 
-CMD ["uv", "run", "pytest", "/app/tests"]
+RUN mv /app/tests/entrypoint.sh /entrypoint.sh \
+    && chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

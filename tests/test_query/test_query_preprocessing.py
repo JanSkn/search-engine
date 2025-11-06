@@ -8,13 +8,13 @@ class TestQueryTree:
     def query_tree(self) -> QueryTree:
         return QueryTree()
 
-    def test_parse_query_returns_node(self, query_tree: QueryTree) -> None:
+    def test_parse_query_returns_node(self, query_tree: QueryTree):
         query_tree.parse_query(["A"])
 
         assert query_tree.root is not None
         assert isinstance(query_tree.root, Node)
 
-    def test_parse_query_missing_closing_parenthesis(self, query_tree: QueryTree) -> None:
+    def test_parse_query_missing_closing_parenthesis(self, query_tree: QueryTree):
         with pytest.warns(ParenthesesWarning) as record:
             query_tree.parse_query(["(", "A", "AND", "B"])
 
@@ -27,7 +27,7 @@ class TestQueryTree:
         assert isinstance(w_2, ParenthesesWarning)
         assert str(w_2) == "Missing closing parenthesis: query may not be parsed as intended"
 
-    def _assert_tree_equal(self, node: Node, expected: dict[str, any]) -> None:
+    def _assert_tree_equal(self, node: Node, expected: dict[str, any]):
         assert node is not None
         assert node.value == expected["value"]
 
@@ -170,7 +170,7 @@ class TestQueryTree:
         ),
     ]
     )
-    def test_parse_query(self, query_tree: QueryTree, query: list[str], expected_tree: dict[str, any]) -> None:
+    def test_parse_query(self, query_tree: QueryTree, query: list[str], expected_tree: dict[str, any]):
         query_tree.parse_query(query)
         self._assert_tree_equal(query_tree.root, expected_tree)
         
