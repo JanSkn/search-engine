@@ -22,9 +22,7 @@ class PostingList(BaseModel):
                     self.skip_pointers[i] = j  # skip from i to j
 
     # for numpy
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class SearchResult(BaseModel):
