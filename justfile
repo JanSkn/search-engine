@@ -21,10 +21,14 @@ lint:
     cd src/backend && uv run ruff check api/ search_engine/
     cd src/backend && uv run ruff format --check --diff api/ search_engine/
 
+format:
+    @echo "Fixing code style with Ruff..."
+    cd src/backend && uv run ruff format api/ search_engine/
+
 mypy:
     @echo "Type checking with MyPy..."
     cd src/backend && uv run mypy api/
     cd src/backend && uv run mypy search_engine/
 
-test args="":
+test *args="":
     just -f tests/justfile test {{args}}
