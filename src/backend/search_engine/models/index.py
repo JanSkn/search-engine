@@ -7,6 +7,11 @@ class PostingList(BaseModel):
     postings: np.ndarray  # doc ids
     skip_pointers: dict[int, int] = Field(default_factory=dict)
 
+    # dicts with doc ids as key
+    # avoids resorting if postings get sorted
+    term_frequencies: dict[int, int]
+    positions: dict[int, np.ndarray]
+
     @property
     def doc_freq(self) -> int:
         return len(self.postings)
@@ -22,9 +27,7 @@ class PostingList(BaseModel):
                     self.skip_pointers[i] = j  # skip from i to j
 
     # for numpy
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class SearchResult(BaseModel):

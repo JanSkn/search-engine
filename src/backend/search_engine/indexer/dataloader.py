@@ -4,22 +4,29 @@ import io
 import json
 import random
 import sys
-from typing import Iterable, Tuple, List, Dict
+from typing import Iterable
 
 import requests
 from tqdm import tqdm
 
 
-def open_stream(tsv_gz: str) -> io.BufferedReader:
+def open_stream(tsv_gz: str) -> io.TextIOBase:
     if tsv_gz.startswith(("http://", "https://")):
         resp = requests.get(tsv_gz, stream=True, timeout=60)
         resp.raise_for_status()
-        return gzip.GzipFile(fileobj=resp.raw)
+        raw = resp.raw
+        if tsv_gz.endswith(".gz"):
+            return gzip.GzipFile(fileobj=raw, mode="rb")
+        else:
+            return raw
     else:
-        return gzip.open(tsv_gz, "rb")
+        if tsv_gz.endswith(".gz"):
+            return gzip.open(tsv_gz, "rb")
+        else:
+            return open(tsv_gz, "rb")
 
 
-def iter_docs(tsv_stream: io.BufferedReader) -> Iterable[Tuple[str, str, str, str]]:
+def iter_docs(tsv_stream: io.BufferedReader) -> Iterable[tuple[str, str, str, str]]:
     # get (docid, url, title, body)
     for line in tsv_stream:
         try:
@@ -33,9 +40,11 @@ def iter_docs(tsv_stream: io.BufferedReader) -> Iterable[Tuple[str, str, str, st
         yield docid, url, title, body
 
 
-def reservoir_sample(stream: Iterable[Tuple[str, str, str, str]], k: int, seed: int = 42):
+def reservoir_sample(
+    stream: Iterable[tuple[str, str, str, str]], k: int, seed: int = 42
+) -> list[tuple[str, str, str, str]]:
     rng = random.Random(seed)
-    sample: List[Tuple[str, str, str, str]] = []
+    sample: list[tuple[str, str, str, str]] = []
     for i, item in enumerate(stream, start=1):
         if i <= k:
             sample.append(item)
@@ -46,7 +55,7 @@ def reservoir_sample(stream: Iterable[Tuple[str, str, str, str]], k: int, seed: 
     return sample
 
 
-def write_jsonl(records: Iterable[Dict], out_path: str):
+def write_jsonl(records: Iterable[dict], out_path: str) -> None:
     is_gz = out_path.endswith(".gz")
     open_func = gzip.open if is_gz else open
     mode = "wt" if is_gz else "w"
@@ -56,17 +65,28 @@ def write_jsonl(records: Iterable[Dict], out_path: str):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Sample n MS MARCO docs and save as JSONL (.jsonl or .jsonl.gz).")
-    ap.add_argument("--tsv-gz", required=True, help="Path or URL to ms-marco-docs.tsv.gz")
+    ap = argparse.ArgumentParser(
+        description="Sample n MS MARCO docs and save as JSONL (.jsonl or .jsonl.gz)."
+    )
+    ap.add_argument(
+        "--tsv-gz", required=True, help="Path or URL to ms-marco-docs.tsv.gz"
+    )
     ap.add_argument("--n", type=int, default=15000, help="Sample size (default: 15000)")
-    ap.add_argument("--out", required=True, help="Output file, e.g., msmarco_15k.jsonl.gz")
+    ap.add_argument(
+        "--out", required=True, help="Output file, e.g., msmarco_15k.jsonl.gz"
+    )
     ap.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     args = ap.parse_args()
 
     print(f"Opening source: {args.tsv_gz}", file=sys.stderr)
     with open_stream(args.tsv_gz) as gz_stream:
         sampled = reservoir_sample(
-            tqdm(iter_docs(gz_stream), desc="Scanning & sampling", unit="line", mininterval=1.0),
+            tqdm(
+                iter_docs(gz_stream),
+                desc="Scanning & sampling",
+                unit="line",
+                mininterval=1.0,
+            ),
             k=args.n,
             seed=args.seed,
         )
