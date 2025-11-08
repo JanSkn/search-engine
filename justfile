@@ -15,7 +15,7 @@ install:
     just install-frontend
     just install-backend
 
-local uvicorn-args="":
+local *uvicorn-args:
     chmod +x local.sh
     ./local.sh {{uvicorn-args}}
 
@@ -32,5 +32,5 @@ mypy:
     cd src/backend && uv run mypy api/
     cd src/backend && uv run mypy search_engine/
 
-test args="":
+test *args:
     just -f tests/justfile test {{args}}

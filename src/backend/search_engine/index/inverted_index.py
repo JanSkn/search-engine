@@ -27,7 +27,7 @@ class InvertedIndex:
             data = json.load(f)
 
         inv = cls()
-        inv.doc_store = data.get("doc_store", {})
+        inv.doc_store = {int(k): v for k, v in data.get("doc_store", {}).items()}
         inv._num_docs = data.get("num_docs", len(inv.doc_store))
 
         index_data = data.get("index", {})
