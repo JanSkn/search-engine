@@ -7,6 +7,12 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.119.1",
     "uvicorn>=0.38.0",
+    "spacy>=3.8.8,<3.9",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "numpy>=2.3.4",
+    "pydantic>=2.12.3",
+    "requests>=2.32.5",
+    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]

@@ -7,11 +7,16 @@ class PostingList(BaseModel):
     postings: np.ndarray  # doc ids
     skip_pointers: dict[int, int] = Field(default_factory=dict)
 
+    # dicts with doc ids as key
+    # avoids resorting if postings get sorted
+    term_frequencies: dict[int, int]
+    positions: dict[int, np.ndarray]
+
     @property
     def doc_freq(self) -> int:
         return len(self.postings)
 
-    def build_skip_pointers(self, index: int) -> None:
+    def build_skip_pointers(self) -> None:
         n = len(self.postings)
         step = int(sqrt(n)) if n > 0 else 0
 
