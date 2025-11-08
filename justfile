@@ -7,6 +7,9 @@ install-frontend:
 install-backend:
     cd src/backend && uv sync
 
+uv-add *args:
+    cd src/backend && uv add {{args}}
+
 # install frontend and backend
 install:
     just install-frontend
@@ -20,6 +23,9 @@ lint:
     @echo "Linting with Ruff..."
     cd src/backend && uv run ruff check api/ search_engine/
     cd src/backend && uv run ruff format --check --diff api/ search_engine/
+
+format:
+    cd src/backend && uv run ruff format api/ search_engine/
 
 mypy:
     @echo "Type checking with MyPy..."
