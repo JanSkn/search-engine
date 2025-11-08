@@ -11,8 +11,7 @@ from backend.search_engine.query.query_preprocessing import (
     NOT,
 )
 
-# TODO later without loading from JSON
-inverted_index = InvertedIndex.from_json("/Users/Jan/VSCode/search-engine/src/index.json")
+inverted_index = InvertedIndex()
 
 
 class QueryEngine:
@@ -50,19 +49,19 @@ class QueryEngine:
             pos_2 = posting_list_1.positions
 
         i = j = 0
-        
+
         if mode == "AND":
             doc_ids = []
             result_tf = {}
             result_pos = {}
-            
+
             while i < l_1 and j < l_2:
                 if postings_1[i] == postings_2[j]:
                     doc_id = postings_1[i]
                     doc_ids.append(doc_id)
-                    
+
                     result_tf[doc_id] = tf_1.get(doc_id, 0) + tf_2.get(doc_id, 0)
-                    
+
                     pos_list = []
                     if doc_id in pos_1:
                         pos_list.append(pos_1[doc_id])
@@ -70,7 +69,7 @@ class QueryEngine:
                         pos_list.append(pos_2[doc_id])
                     if pos_list:
                         result_pos[doc_id] = np.concatenate(pos_list)
-                    
+
                     i += 1
                     j += 1
                 elif postings_1[i] < postings_2[j]:
@@ -89,22 +88,22 @@ class QueryEngine:
                         j = skip_pointers_2[j]
                     else:
                         j += 1
-            
+
             res = PostingList(
                 postings=np.array(doc_ids),
                 term_frequencies=result_tf,
-                positions=result_pos
+                positions=result_pos,
             )
             res.build_skip_pointers()
-        
+
         elif mode == "OR":
             doc_ids = np.union1d(postings_1, postings_2)
             result_tf = {}
             result_pos = {}
-            
+
             for doc_id in doc_ids:
                 result_tf[doc_id] = tf_1.get(doc_id, 0) + tf_2.get(doc_id, 0)
-                
+
                 pos_list = []
                 if doc_id in pos_1:
                     pos_list.append(pos_1[doc_id])
@@ -112,21 +111,19 @@ class QueryEngine:
                     pos_list.append(pos_2[doc_id])
                 if pos_list:
                     result_pos[doc_id] = np.concatenate(pos_list)
-            
+
             res = PostingList(
-                postings=doc_ids,
-                term_frequencies=result_tf,
-                positions=result_pos
+                postings=doc_ids, term_frequencies=result_tf, positions=result_pos
             )
             res.build_skip_pointers()
-        
+
         else:  # NOT
             all_doc_ids = inverted_index.all_doc_ids
             doc_ids = []
             i = j = 0
             postings = posting_list_2.postings
             len_docs, len_postings = len(all_doc_ids), len(postings)
-            
+
             while i < len_docs and j < len_postings:
                 if all_doc_ids[i] < postings[j]:
                     doc_ids.append(all_doc_ids[i])
@@ -136,19 +133,17 @@ class QueryEngine:
                     j += 1
                 else:
                     j += 1
-            
+
             # add missing docs
             if i < len_docs:
                 doc_ids.extend(all_doc_ids[i:])
-            
+
             # TODO no tf and positions because excluding?
             res = PostingList(
-                postings=np.array(doc_ids),
-                term_frequencies={},
-                positions={}
+                postings=np.array(doc_ids), term_frequencies={}, positions={}
             )
             res.build_skip_pointers()
-        
+
         return res
 
     @staticmethod
@@ -157,9 +152,7 @@ class QueryEngine:
             pl = inverted_index.index.get(node.value)
             if pl is None:
                 return PostingList(
-                    postings=np.array([]),
-                    term_frequencies={},
-                    positions={}
+                    postings=np.array([]), term_frequencies={}, positions={}
                 )
             return pl
 
@@ -175,9 +168,7 @@ class QueryEngine:
 
         if node.value in NOT:
             empty = PostingList(
-                postings=np.array([]),
-                term_frequencies={},
-                positions={}
+                postings=np.array([]), term_frequencies={}, positions={}
             )
             r = QueryEngine.evaluate(node.right)  # not-child stored right
             return QueryEngine._find_docs(empty, r, "NOT")
@@ -186,25 +177,25 @@ class QueryEngine:
         qt = QueryTree()
         qt.parse_query(self._normalized_query())
         posting_lists = QueryEngine.evaluate(qt.root)
-        
+
         if posting_lists is None or len(posting_lists.postings) == 0:
             return []
-        
+
         search_results = []
         for doc_id in posting_lists.postings[:limit]:
             doc_data = inverted_index.doc_store.get(doc_id)
-            
+
             if doc_data is None:
                 print(f"Warning: doc_id {doc_id} not found in doc_store")
                 continue
-            
+
             url = doc_data.get("url")
             title = doc_data.get("title", "Untitled")
-            
+
             if url is None:
                 print(f"Warning: doc_id {doc_id} has no URL")
                 continue
-            
+
             try:
                 search_result = SearchResult(
                     document_id=doc_id,
@@ -215,5 +206,5 @@ class QueryEngine:
             except Exception as e:
                 print(f"Error creating SearchResult for doc_id {doc_id}: {e}")
                 continue
-        
+
         return search_results

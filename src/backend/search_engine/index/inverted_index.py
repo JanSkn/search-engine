@@ -23,6 +23,7 @@ class InvertedIndex:
     @classmethod
     def from_json(cls, path: str) -> "InvertedIndex":
         import json
+
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -33,8 +34,12 @@ class InvertedIndex:
         index_data = data.get("index", {})
         for term, pl_dict in index_data.items():
             postings = np.array(pl_dict["postings"], dtype=int)
-            term_frequencies = {int(k): v for k, v in pl_dict["term_frequencies"].items()}
-            positions = {int(k): np.array(v, dtype=int) for k, v in pl_dict["positions"].items()}
+            term_frequencies = {
+                int(k): v for k, v in pl_dict["term_frequencies"].items()
+            }
+            positions = {
+                int(k): np.array(v, dtype=int) for k, v in pl_dict["positions"].items()
+            }
             skip_pointers = pl_dict.get("skip_pointers", {})
 
             pl = PostingList(
