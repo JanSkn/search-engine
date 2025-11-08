@@ -42,16 +42,14 @@ def _iter_jsonl(path: str) -> Iterable[tuple[str, str, str, str]]:
             if not line.strip():
                 continue
             obj = json.loads(line)
-            docid = str(obj.get("doc_id", obj.get("id", "")))
+            docid = obj.get("doc_id", "")
             url = obj.get("url", "")
             title = obj.get("title", "")
-
-            body = obj.get("body", obj.get("text", obj.get("abstract", "")))
+            body = obj.get("body", "")
             yield docid, url, title, body
 
 
 def _should_keep(tok) -> bool:
-    # filter rule for indexing
     # keep alphabetic words, digits, urls, emails, and hyphen words
     if tok.is_space or tok.is_punct:
         return False
@@ -82,8 +80,8 @@ def build_index(
     for doc_id, (docid, url, title, body) in enumerate(_iter_jsonl(jsonl_path)):
         if limit is not None and doc_id >= limit:
             break
-
-        inv._doc_store[doc_id] = url
+        
+        inv.doc_store[doc_id] = url
 
         # build text to tokenize
         text = f"{title}\n\n{body}".strip().lower()
@@ -102,7 +100,7 @@ def build_index(
                 term = term_text
 
             # get existing posting list or make new
-            pl = inv._index.get(term)
+            pl = inv.index.get(term)
             if pl is None:
                 # new unkown term
                 pl = PostingList(
@@ -114,7 +112,7 @@ def build_index(
                     postings=[doc_id],
                     skip_pointers={},
                 )
-                inv._index[term] = pl
+                inv.index[term] = pl
             else:
                 # term exists: check if last entry is already this document
                 if pl.postings and pl.postings[-1] == doc_id:
@@ -131,6 +129,3 @@ def build_index(
 
     inv.finalize()
     return inv
-
-
-lemmatize_search_query("A AND (b or c)")

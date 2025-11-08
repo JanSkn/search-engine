@@ -1,29 +1,58 @@
 import argparse
-import pickle
-from ..indexer.dataloader import stream_documents
-from ..indexer.index_builder import build_index
+import json
+import sys
+
+from backend.search_engine.indexer.index_builder import build_index
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="build inverted index with positions")
-    parser.add_argument(
-        "--corpus", type=str, required=True, help="path to tsv gz or jsonl"
+def postinglist_to_dict(pl):
+
+    return {
+        "urls": pl.urls,
+        "titles": pl.titles,
+        "doc_freq": pl.doc_freq,
+        "term_frequencies": pl.term_frequencies,
+        "positions": pl.positions,
+        "postings": pl.postings,
+    }
+
+
+def inverted_index_to_dict(inv):
+    """Konvertiert den gesamten InvertedIndex in ein JSON-kompatibles Dict."""
+    return {
+        "index": {term: postinglist_to_dict(pl) for term, pl in inv._index.items()},
+        "doc_store": inv._doc_store,
+        "num_docs": getattr(inv, "_num_docs", len(inv._doc_store)),
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Baue einen Inverted Index aus JSONL(.gz) und speichere ihn als JSON."
     )
-    parser.add_argument("--limit", type=int, default=None, help="optional doc limit")
-    parser.add_argument(
-        "--lang", type=str, default="en", help="language code for tokenizer"
-    )
-    parser.add_argument(
-        "--out", type=str, default="index.pkl", help="path to output pickle"
-    )
-    args = parser.parse_args()
+    ap.add_argument("--jsonl", required=True, help="Pfad zur JSONL/JSONL.GZ-Datei (mit doc_id, url, title, body).")
+    ap.add_argument("--out", required=True, help="Zieldatei für den JSON-Index (z. B. index.json).")
+    ap.add_argument("--limit", type=int, default=None, help="Max. Anzahl Dokumente (optional).")
+    ap.add_argument("--spacy-model", default="en_core_web_sm", help="spaCy-Modell (default: en_core_web_sm).")
+    ap.add_argument("--lang", default="en", help="Sprache (default: en).")
+    ap.add_argument("--no-lemma", action="store_true", help="Lemmatisierung ausschalten.")
+    args = ap.parse_args()
 
-    docs = stream_documents(args.corpus)
-    inv = build_index(docs, limit=args.limit, lang=args.lang)
-    with open(args.out, "wb") as f:
-        pickle.dump(inv, f)
+    print(f"[INFO] Baue Inverted Index aus: {args.jsonl}", file=sys.stderr)
+    inv = build_index(
+        jsonl_path=args.jsonl,
+        limit=args.limit,
+        lang=args.lang,
+        spacy_model=args.spacy_model,
+        use_lemma=(not args.no_lemma),
+    )
 
-    print(f"ok built index with {inv.num_docs} docs to {args.out}")
+    print(f"[INFO] Speichere Index als JSON: {args.out}", file=sys.stderr)
+    data = inverted_index_to_dict(inv)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+    print("[INFO] Fertig.", file=sys.stderr)
 
 
 if __name__ == "__main__":
