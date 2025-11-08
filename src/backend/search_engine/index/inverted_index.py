@@ -1,3 +1,4 @@
+from typing import Any
 import numpy as np
 from backend.search_engine.models.index import PostingList
 
@@ -6,7 +7,7 @@ class InvertedIndex:
     def __init__(self) -> None:
         self.all_doc_ids: np.ndarray = np.array([], dtype=int)  # TODO needs much memory
         self.index: dict[str, PostingList] = {}
-        self.doc_store: dict[int, str] = {}
+        self.doc_store: dict[int, Any] = {}
 
     def finalize(self) -> None:
         # computes document frequencies and caches doc count
