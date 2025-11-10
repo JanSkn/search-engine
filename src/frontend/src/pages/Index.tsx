@@ -4,7 +4,7 @@ import { SearchResults } from "@/components/SearchResults";
 import { LoadingState } from "@/components/LoadingState";
 import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import seekrLogo from "@/assets/seekr-logo.png";
 import { mockResults } from "@/mock/searchResults";
 
@@ -23,6 +23,8 @@ const Index = () => {
   const [currentQuery, setCurrentQuery] = useState("");
   const { toast } = useToast();
   const [currentText, setCurrentText] = useState("");
+  const [limit, setLimit] = useState(10);
+  const [showSettings, setShowSettings] = useState(false);
 
   const RESULTS_PER_PAGE = 10;
 
@@ -40,16 +42,18 @@ const Index = () => {
     const params = new URLSearchParams(window.location.search);
     const page = parseInt(params.get("page") || "1");
     const query = params.get("q") || "";
+    const urlLimit = parseInt(params.get("limit") || "10");
     
     if (page > 1) setCurrentPage(page);
+    if (urlLimit) setLimit(urlLimit);
     if (query) {
       setCurrentQuery(query);
       setHasSearched(true);
-      handleSearch(query);
+      handleSearch(query, urlLimit);
     }
   }, []);
 
-  // Update URL when page changes
+  // Update URL when page or limit changes
   useEffect(() => {
     if (hasSearched && currentQuery) {
       const params = new URLSearchParams();
@@ -57,12 +61,15 @@ const Index = () => {
       if (currentPage > 1) {
         params.set("page", currentPage.toString());
       }
+      if (limit !== 10) {
+        params.set("limit", limit.toString());
+      }
       window.history.pushState({}, "", `?${params.toString()}`);
       
       // Scroll to top when page changes
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
-  }, [currentPage, hasSearched, currentQuery]);
+  }, [currentPage, limit, hasSearched, currentQuery]);
 
   // Typing animation effect
   useEffect(() => {
@@ -104,31 +111,30 @@ const Index = () => {
     };
   }, [hasSearched]);
 
-  const handleSearch = async (query: string) => {
+  const handleSearch = async (query: string, customLimit = limit) => {
     setIsLoading(true);
     setError(null);
     setHasSearched(true);
     setCurrentQuery(query);
-    setCurrentPage(1); // Reset to page 1 on new search
+    setCurrentPage(1);
     setAllResults([]);
-
-    // Scroll to top when searching
+    setLimit(customLimit);
+  
     window.scrollTo({ top: 0, behavior: "smooth" });
-
+  
     try {
       const response = await fetch(
-        `https://127.0.0.1:8000/search?q=${encodeURIComponent(query)}`
+        `http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
       );
-
+  
       if (!response.ok) {
         throw new Error(`Search failed: ${response.statusText}`);
       }
-
+  
       const data = await response.json();
-
       const searchResults = Array.isArray(data) ? data : data.results || [];
       setAllResults(searchResults);
-
+  
       if (searchResults.length === 0) {
         toast({
           title: "No results found",
@@ -138,12 +144,11 @@ const Index = () => {
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "An unknown error occurred while searching";
-
+  
       console.error("Search error:", errorMessage);
-
       setError(errorMessage);
       setAllResults(mockResults);
-
+  
       toast({
         title: "Search failed — showing mock results",
         description: "Backend request failed. Displaying demo data instead.",
@@ -152,6 +157,14 @@ const Index = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleLimitChange = (newLimit: number) => {
+    setLimit(newLimit);
+    if (hasSearched && currentQuery) {
+      handleSearch(currentQuery, newLimit);
+    }
+    setShowSettings(false);
   };
 
   const handlePageChange = (newPage: number) => {
@@ -197,6 +210,57 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Settings Button - Fixed Position */}
+      {hasSearched && (
+        <div className="fixed top-4 right-4 z-50">
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className="p-2.5 rounded-lg bg-background border border-input hover:bg-accent transition-colors shadow-sm"
+            aria-label="Settings"
+          >
+            <Settings className="h-5 w-5" />
+          </button>
+
+          {/* Settings Dropdown */}
+          {showSettings && (
+            <>
+              {/* Backdrop */}
+              <div 
+                className="fixed inset-0 z-40" 
+                onClick={() => setShowSettings(false)}
+              />
+              
+              {/* Settings Panel */}
+              <div className="absolute right-0 mt-2 w-64 bg-background border border-input rounded-lg shadow-lg p-4 z-50">
+                <h3 className="font-semibold text-sm mb-3">Search Settings</h3>
+                
+                <div className="space-y-2">
+                  <label className="text-sm text-muted-foreground">
+                    Max. total results
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[10, 25, 50, 100].map((l) => (
+                      <button
+                        key={l}
+                        onClick={() => handleLimitChange(l)}
+                        disabled={isLoading}
+                        className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                          limit === l
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-input hover:bg-accent"
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Centered Landing View */}
       {!hasSearched && (
         <div className="flex items-center justify-center min-h-screen px-4">

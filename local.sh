@@ -3,17 +3,15 @@ set -euo pipefail
 
 PIDS=()
 
-pushd src/backend
-uv run uvicorn api.v1.app:app --host 127.0.0.1 --port 8000 "$@" &
+cd src
+uv run --project backend uvicorn backend.api.v1.app:app --host 127.0.0.1 --port 8000 "$@" &
 PIDS+=($!)
 echo "Uvicorn server started with PID ${PIDS[0]}"
-popd
 
-pushd src/frontend
+cd frontend
 npm run dev &
 PIDS+=($!)
 echo "Vite server started with PID ${PIDS[1]}"
-popd
 
 cleanup() {
   echo "Stopping all services..."
