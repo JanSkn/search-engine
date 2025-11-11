@@ -7,12 +7,15 @@ install-frontend:
 install-backend:
     cd src/backend && uv sync
 
+uv-add *args:
+    cd src/backend && uv add {{args}}
+
 # install frontend and backend
 install:
     just install-frontend
     just install-backend
 
-local uvicorn-args="":
+local *uvicorn-args:
     chmod +x local.sh
     ./local.sh {{uvicorn-args}}
 
@@ -22,7 +25,6 @@ lint:
     cd src/backend && uv run ruff format --check --diff api/ search_engine/
 
 format:
-    @echo "Fixing code style with Ruff..."
     cd src/backend && uv run ruff format api/ search_engine/
 
 mypy:
@@ -30,5 +32,5 @@ mypy:
     cd src/backend && uv run mypy api/
     cd src/backend && uv run mypy search_engine/
 
-test *args="":
+test *args:
     just -f tests/justfile test {{args}}
