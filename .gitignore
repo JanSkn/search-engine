@@ -230,3 +230,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+*.tsv
+*.gz

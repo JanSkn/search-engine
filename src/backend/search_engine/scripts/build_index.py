@@ -27,7 +27,7 @@ def inverted_index_to_dict(inv: InvertedIndex) -> dict:
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Baue einen Inverted Index aus JSONL(.gz) und speichere ihn als JSON."
+        description="Build inverted index from JSONL(.gz) and store it as JSON."
     )
     ap.add_argument("--jsonl", required=True, help="Path to JSONL/JSONL.GZ file.")
     ap.add_argument("--out", required=True, help="Target file (e.g. index.json).")

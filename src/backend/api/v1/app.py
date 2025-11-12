@@ -1,10 +1,10 @@
 from typing import Annotated
 from fastapi import FastAPI, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from backend.search_engine.models.index import SearchResult
 from backend.search_engine.query.query_engine import QueryEngine
+from backend.search_engine.error_handling import InvalidOperatorError
 
 app = FastAPI()
 
@@ -17,23 +17,20 @@ app.add_middleware(
 )
 
 # TODO change once not in json anymore
-from backend.search_engine.query.query_engine import inverted_index
-from backend.search_engine.index.inverted_index import InvertedIndex
+from backend.search_engine.query.query_engine import inverted_index  # noqa: E402
+from backend.search_engine.index.inverted_index import InvertedIndex  # noqa: E402
 
 inverted_index_loaded = InvertedIndex.from_json(
-    "PATH"
+    "/Users/Jan/VSCode/search-engine/src/index.json"
 )
 inverted_index.index = inverted_index_loaded.index
 inverted_index.doc_store = inverted_index_loaded.doc_store
-inverted_index.all_doc_ids = inverted_index_loaded.all_doc_ids
 # ---------------------
 
 
 @app.get("/search", response_model=list[SearchResult])
 async def search(
-    q: Annotated[
-        str, Query(min_length=1, max_length=50, description="Search query")
-    ] = ...,
+    q: Annotated[str, Query(min_length=1, max_length=50, description="Search query")],
     limit: Annotated[
         int, Query(ge=1, le=100, description="Maximum number of results")
     ] = 10,
@@ -48,7 +45,7 @@ async def search(
         qe = QueryEngine(q)
 
         return qe.search_results(limit)
-    except ValueError as e:
+    except InvalidOperatorError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid query syntax: {str(e)}",
@@ -56,5 +53,5 @@ async def search(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Search operation failed",
+            detail=f"Search operation failed: {str(e)}",
         )
