@@ -1,6 +1,9 @@
 from __future__ import annotations
 import warnings
-from backend.search_engine.error_handling import ParenthesesWarning
+from backend.search_engine.error_handling import (
+    ParenthesesWarning,
+    InvalidOperatorError,
+)
 
 # TODO considering reordering of terms by frequency
 
@@ -58,31 +61,36 @@ class QueryTree:
         operator_tokens = AND | OR | NOT | {"(", ")"}
         return any(token in operator_tokens for token in tokens)
 
-    @staticmethod
-    def _create_biword_query(tokens: list[str]) -> list[str]:
-        if len(tokens) == 1:
-            return tokens
+    def _validate_not_usage(self, node: Node, parent: Node | None = None) -> None:
+        if node is None:
+            return
 
-        # [new, york, city] -> [(, new, AND, york, ), AND, (, york, AND, city, )]
-        joined = []
-        for i in range(len(tokens) - 1):
-            joined.append("(")
-            joined.append(tokens[i])
-            joined.append("AND")
-            joined.append(tokens[i + 1])
-            joined.append(")")
-            if i < len(tokens) - 2:
-                joined.append("AND")
-        return joined
+        if node.value in NOT:
+            # NOT without a parent -> not allowed
+            if parent is None:
+                raise InvalidOperatorError("NOT must be combined with AND")
+
+            # parent must be AND
+            if parent.value not in AND:
+                raise InvalidOperatorError("NOT must be combined with AND")
+
+        # OR also cannot have NOT children
+        if node.value in OR:
+            if node.left and node.left.value in NOT:
+                raise InvalidOperatorError("NOT cannot be combined with OR")
+            if node.right and node.right.value in NOT:
+                raise InvalidOperatorError("NOT cannot be combined with OR")
+
+        if node.left:
+            self._validate_not_usage(node.left, node)
+        if node.right:
+            self._validate_not_usage(node.right, node)
 
     def parse_query(self, tokens: list[str]) -> None:
         self._warnings_stack.clear()
-
-        if not self._has_operators(tokens):
-            tokens = self._create_biword_query(tokens)
-
         self._check_parentheses(tokens)
         self._root = self._parse_query(tokens)
+        self._validate_not_usage(self._root)
 
     def _parse_query(self, tokens: list[str]) -> Node:
         node = self._parse_term(tokens)

@@ -6,7 +6,6 @@ import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import seekrLogo from "@/assets/seekr-logo.png";
-import { mockResults } from "@/mock/searchResults";
 
 interface SearchResult {
   title: string;
@@ -128,7 +127,18 @@ const Index = () => {
       );
   
       if (!response.ok) {
-        throw new Error(`Search failed: ${response.statusText}`);
+        let errorMsg = `Search failed: ${response.status} ${response.statusText}`;
+
+        try {
+          const data = await response.json();
+          if (data.detail) {
+            errorMsg = data.detail;       
+          } 
+        } catch {
+          /* fallback → do nothing */
+        }
+
+        throw new Error(errorMsg);
       }
   
       const data = await response.json();
@@ -144,14 +154,15 @@ const Index = () => {
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "An unknown error occurred while searching";
-  
+
       console.error("Search error:", errorMessage);
+
       setError(errorMessage);
-      setAllResults(mockResults);
-  
+      setAllResults([]);   // Nur leeren — keine Demo
+
       toast({
-        title: "Search failed — showing mock results",
-        description: "Backend request failed. Displaying demo data instead.",
+        title: "Search failed",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
