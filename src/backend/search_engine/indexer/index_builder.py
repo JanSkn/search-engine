@@ -21,6 +21,9 @@ def lemmatize_search_query(query: str) -> list[str]:
     doc = nlp(query)
 
     for token in doc:
+        if token.is_space:
+            continue
+
         word = token.text
 
         if word in KEEP_TOKENS:

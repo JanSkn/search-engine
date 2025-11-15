@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.12.3",
     "requests>=2.32.5",
     "tqdm>=4.67.1",
+    "typer>=0.20.0",
+    "pytest-cov>=7.0.0",
 ]
 
 [dependency-groups]
@@ -20,4 +22,6 @@ dev = [
     "mypy>=1.18.2",
     "pytest>=8.4.2",
     "ruff>=0.14.1",
+    "types-requests>=2.32.4.20250913", # for requests for mypy
+    "types-tqdm>=4.67.0.20250809", # for tqdm for mypy
 ]

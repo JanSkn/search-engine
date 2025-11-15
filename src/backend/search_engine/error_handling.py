@@ -17,3 +17,11 @@ class ParenthesesWarning(UserWarning):
             "open_count": self.open_count,
             "close_count": self.close_count,
         }
+
+
+class InvalidQueryError(Exception):
+    pass
+
+
+class InvalidOperatorError(InvalidQueryError):
+    pass
