@@ -1,15 +1,11 @@
 [project]
-name = "search-engine"
+name = "backend"
 version = "0.1.0"
-description = "Minimal search engine"
-readme = "README.md"
+description = "Search Engine Backend"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.119.1",
     "uvicorn>=0.38.0",
-    "spacy>=3.8.8,<3.9",
-    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
-    "numpy>=2.3.4",
     "pydantic>=2.12.3",
     "requests>=2.32.5",
     "tqdm>=4.67.1",
@@ -20,8 +16,16 @@ dependencies = [
 [dependency-groups]
 dev = [
     "mypy>=1.18.2",
+    "pybind11-stubgen>=2.5.5",
     "pytest>=8.4.2",
     "ruff>=0.14.1",
     "types-requests>=2.32.4.20250913", # for requests for mypy
     "types-tqdm>=4.67.0.20250809", # for tqdm for mypy
 ]
+
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+cmake.source-dir = "bindings"

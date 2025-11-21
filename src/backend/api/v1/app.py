@@ -1,12 +1,26 @@
 from typing import Annotated
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.logging_config import get_logger
 from backend.search_engine.models.index import SearchResult
+from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.query.query_engine import QueryEngine
 from backend.search_engine.error_handling import InvalidOperatorError
 
-app = FastAPI()
+logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.debug("Loading search index...")
+    app.state.inverted_index = get_index()
+    yield
+    logger.debug("Shutting down...")
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,17 +30,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# TODO change once not in json anymore
-from backend.search_engine.query.query_engine import inverted_index  # noqa: E402
-from backend.search_engine.index.inverted_index import InvertedIndex  # noqa: E402
-
-inverted_index_loaded = InvertedIndex.from_json(
-    "/Users/Jan/VSCode/search-engine/src/index.json"
-)
-inverted_index.index = inverted_index_loaded.index
-inverted_index.doc_store = inverted_index_loaded.doc_store
-# ---------------------
-
 
 @app.get("/search", response_model=list[SearchResult])
 async def search(
@@ -35,7 +38,7 @@ async def search(
         int, Query(ge=1, le=100, description="Maximum number of results")
     ] = 10,
 ) -> list[SearchResult]:
-    if inverted_index is None:
+    if app.state.inverted_index is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Search index not loaded",

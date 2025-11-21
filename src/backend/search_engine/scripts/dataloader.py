@@ -1,13 +1,22 @@
 import argparse
 import gzip
 import io
-import json
+import os
 import random
 import sys
 from typing import Iterable
 
 import requests
 from tqdm import tqdm
+
+OUTPUT_DIR = "index_builder/data"
+OUTPUT_FILE = "msmarco.tsv.gz"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUT_PATH = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", OUTPUT_DIR, OUTPUT_FILE
+    )
+)
 
 
 def open_stream(tsv_gz: str) -> io.TextIOBase:
@@ -27,7 +36,6 @@ def open_stream(tsv_gz: str) -> io.TextIOBase:
 
 
 def iter_docs(tsv_stream: io.BufferedReader) -> Iterable[tuple[str, str, str, str]]:
-    # get (docid, url, title, body)
     for line in tsv_stream:
         try:
             line = line.decode("utf-8", errors="replace")
@@ -55,31 +63,26 @@ def reservoir_sample(
     return sample
 
 
-def write_jsonl(records: Iterable[dict], out_path: str) -> None:
-    is_gz = out_path.endswith(".gz")
-    open_func = gzip.open if is_gz else open
-    mode = "wt" if is_gz else "w"
-    with open_func(out_path, mode, encoding="utf-8") as f:
-        for rec in records:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+def write_tsv(records: Iterable[tuple[str, str, str, str]], out_path: str) -> None:
+    """Write sampled records as gzipped TSV."""
+    with gzip.open(out_path, "wt", encoding="utf-8") as f:
+        for docid, url, title, body in records:
+            title_safe = title.replace("\t", " ").replace("\n", " ")
+            body_safe = body.replace("\t", " ").replace("\n", " ")
+            f.write(f"{docid}\t{url}\t{title_safe}\t{body_safe}\n")
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Sample n MS MARCO docs and save as JSONL (.jsonl or .jsonl.gz)."
+        description="Sample n MS MARCO docs and save as gzipped TSV."
     )
-    ap.add_argument(
-        "--tsv-gz", required=True, help="Path or URL to ms-marco-docs.tsv.gz"
-    )
+    ap.add_argument("--tsv", required=True, help="Path or URL to ms-marco-docs")
     ap.add_argument("--n", type=int, default=15000, help="Sample size (default: 15000)")
-    ap.add_argument(
-        "--out", required=True, help="Output file, e.g., msmarco_15k.jsonl.gz"
-    )
     ap.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     args = ap.parse_args()
 
-    print(f"Opening source: {args.tsv_gz}", file=sys.stderr)
-    with open_stream(args.tsv_gz) as gz_stream:
+    print(f"Opening source: {args.tsv}", file=sys.stderr)
+    with open_stream(args.tsv) as gz_stream:
         sampled = reservoir_sample(
             tqdm(
                 iter_docs(gz_stream),
@@ -91,9 +94,11 @@ def main():
             seed=args.seed,
         )
 
-    print(f"Sampled {len(sampled)} docs. Writing JSONL to: {args.out}", file=sys.stderr)
-    records = ({"doc_id": d, "url": u, "title": t, "body": b} for d, u, t, b in sampled)
-    write_jsonl(records, args.out)
+    print(
+        f"Sampled {len(sampled)} docs. Writing TSV (gzipped) to: {OUT_PATH}",
+        file=sys.stderr,
+    )
+    write_tsv(sampled, OUT_PATH)
     print("Done.", file=sys.stderr)
 
 

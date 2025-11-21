@@ -7,7 +7,7 @@ from backend.search_engine.error_handling import (
 
 # TODO considering reordering of terms by frequency
 
-# if adjusting connectors, also add in CONNECTOR_MAPPING
+# NOTE: changing these connectors also requires changing them in the C++ bindings
 AND = {"AND", "&"}
 OR = {"OR", "|"}
 # - without whitespace gets treated as part of the term, e.g. check-in
