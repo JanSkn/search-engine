@@ -174,9 +174,7 @@ class QueryEngine:
                 # no base documents
                 return PostingList(postings=[], term_frequencies={}, positions={})
 
-            result_docs = list_diff(
-                postings_1, postings_2
-            )  # TODO check correct order
+            result_docs = list_diff(postings_1, postings_2)  # TODO check correct order
             result_tf = {
                 doc_id: posting_list_1.term_frequencies.get(doc_id, 0)
                 for doc_id in result_docs
