@@ -53,3 +53,12 @@ Thumbs.db
 # Node / frontend (falls frontend im Projekt ist)
 node_modules/
 dist/
+
+*.tsv
+*.gz
+# allow test data files as they are small and necessary for tests
+!src/backend/search_engine/index_builder/test_data/*.tsv
+!src/backend/search_engine/index_builder/test_data/*.gz
+
+/src/backend/search_engine/index_builder/build/
+/src/backend/search_engine/index/bin/

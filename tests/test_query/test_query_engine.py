@@ -1,7 +1,7 @@
 import pytest
-import numpy as np
 from unittest.mock import Mock, patch
-from backend.search_engine.models.index import PostingList, SearchResult
+from cpp_utils import PostingList, DocInfo, list_union, list_diff, normalize_search_query # type: ignore [import-untyped]
+from backend.search_engine.models.index import SearchResult
 from backend.search_engine.query.query_engine import QueryEngine
 from backend.search_engine.query.query_preprocessing import Node, AND, OR, NOT
 
@@ -26,14 +26,14 @@ def mock_inverted_index():
 class TestPositionalIntersect:
     def test_positional_intersect_basic(self):
         postings1 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 2, 2: 1, 3: 2},
-            positions={1: np.array([0, 5]), 2: np.array([3]), 3: np.array([1, 7])}
+            positions={1: [0, 5], 2: [3], 3: [1, 7]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([1]), 2: np.array([4]), 3: np.array([2])}
+            positions={1: [1], 2: [4], 3: [2]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
@@ -43,22 +43,22 @@ class TestPositionalIntersect:
         # Doc 1: term1 at [0,5], term2 at [1] -> match at position 0
         # Doc 2: term1 at [3], term2 at [4] -> match at position 3
         # Doc 3: term1 at [1,7], term2 at [2] -> match at position 1
-        expected = np.array([1, 2, 3])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3]
+        assert result.postings == expected
         assert result.term_frequencies[1] == 1
         assert result.term_frequencies[2] == 1
         assert result.term_frequencies[3] == 1
     
     def test_positional_intersect_no_match(self):
         postings1 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([0]), 2: np.array([5])}
+            positions={1: [0], 2: [5]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([5]), 2: np.array([0])}
+            positions={1: [5], 2: [0]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
@@ -71,35 +71,35 @@ class TestPositionalIntersect:
     
     def test_positional_intersect_multiple_matches_same_doc(self):
         postings1 = PostingList(
-            postings=np.array([1]),
+            postings=[1],
             term_frequencies={1: 3},
-            positions={1: np.array([0, 3, 6])}
+            positions={1: [0, 3, 6]}
         )
         postings2 = PostingList(
-            postings=np.array([1]),
+            postings=[1],
             term_frequencies={1: 3},
-            positions={1: np.array([1, 4, 7])}
+            positions={1: [1, 4, 7]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
         
         result = QueryEngine._positional_intersect(postings1, postings2, distance=1)
         
-        expected = np.array([1])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1]
+        assert result.postings == expected
         assert result.term_frequencies[1] == 3  # All three positions match
-        np.testing.assert_array_equal(result.positions[1], np.array([0, 3, 6]))
+        assert result.positions[1] == [0, 3, 6]
     
     def test_positional_intersect_different_distance(self):
         postings1 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 2, 2: 1},
-            positions={1: np.array([0, 5]), 2: np.array([10])}
+            positions={1: [0, 5], 2: [10]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([3]), 2: np.array([15])}
+            positions={1: [3], 2: [15]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
@@ -108,20 +108,20 @@ class TestPositionalIntersect:
         
         # Doc 1: term1 at [0,5], term2 at [3] -> match at position 0 (0+3=3)
         # Doc 2: term1 at [10], term2 at [15] -> no match (10+3=13≠15)
-        expected = np.array([1])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1]
+        assert result.postings == expected
         assert result.term_frequencies[1] == 1
     
     def test_positional_intersect_empty_postings(self):
         postings1 = PostingList(
-            postings=np.array([]),
+            postings=[],
             term_frequencies={},
             positions={}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([0]), 2: np.array([1])}
+            positions={1: [0], 2: [1]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
@@ -134,14 +134,14 @@ class TestPositionalIntersect:
 class TestPositionalPhraseSearch:
     def test_phrase_search_basic(self, mock_inverted_index):
         postings1 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([0]), 2: np.array([5]), 3: np.array([10])}
+            positions={1: [0], 2: [5], 3: [10]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([1]), 2: np.array([6]), 3: np.array([15])}
+            positions={1: [1], 2: [6], 3: [15]}
         )
         
         def get_side_effect(term):
@@ -159,24 +159,24 @@ class TestPositionalPhraseSearch:
         # Doc 1: "hello" at 0, "world" at 1 -> match
         # Doc 2: "hello" at 5, "world" at 6 -> match
         # Doc 3: no match (10+1 ≠ 15)
-        expected = np.array([1, 2])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2]
+        assert result.postings == expected
     
     def test_phrase_search_three_terms(self, mock_inverted_index):
         postings1 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([0]), 2: np.array([5])}
+            positions={1: [0], 2: [5]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([1]), 2: np.array([6])}
+            positions={1: [1], 2: [6]}
         )
         postings3 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([2]), 2: np.array([8])}
+            positions={1: [2], 2: [8]}
         )
         
         def get_side_effect(term):
@@ -195,14 +195,14 @@ class TestPositionalPhraseSearch:
         
         # Doc 1: "the" at 0, "quick" at 1, "fox" at 2 -> match
         # Doc 2: "the" at 5, "quick" at 6, "fox" at 8 -> no match (7≠8)
-        expected = np.array([1])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1]
+        assert result.postings == expected
     
     def test_phrase_search_term_not_found(self, mock_inverted_index):
         postings1 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 1, 2: 1},
-            positions={1: np.array([0]), 2: np.array([5])}
+            positions={1: [0], 2: [5]}
         )
         
         def get_side_effect(term):
@@ -229,9 +229,9 @@ class TestPositionalPhraseSearch:
     
     def test_phrase_search_single_term(self, mock_inverted_index):
         postings = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([0]), 2: np.array([5]), 3: np.array([10])}
+            positions={1: [0], 2: [5], 3: [10]}
         )
         
         mock_inverted_index.index.get.return_value = postings
@@ -239,19 +239,19 @@ class TestPositionalPhraseSearch:
         qe = QueryEngine("hello")
         result = qe._positional_phrase_search(["hello"])
         
-        expected = np.array([1, 2, 3])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3]
+        assert result.postings == expected
     
     def test_phrase_search_no_positional_match(self, mock_inverted_index):
         postings1 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 2, 2: 2},
-            positions={1: np.array([0, 10]), 2: np.array([5, 15])}
+            positions={1: [0, 10], 2: [5, 15]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2]),
+            postings=[1, 2],
             term_frequencies={1: 2, 2: 2},
-            positions={1: np.array([5, 20]), 2: np.array([8, 25])}
+            positions={1: [5, 20], 2: [8, 25]}
         )
         
         def get_side_effect(term):
@@ -270,35 +270,63 @@ class TestPositionalPhraseSearch:
         assert len(result.postings) == 0
 
 
+class TestFindDocsUtils:
+    def test_normalize_search_query_phrase_query(self):
+        text = "The quick brown fox is running!"
+        result = normalize_search_query(text)
+        expected = ["the", "quick", "brown", "fox", "is", "run"]
+        assert result == expected
+
+    def test_normalize_search_query_bool_query(self):
+        text = "(Cats AND dogs) OR birds"
+        result = normalize_search_query(text)
+        expected = ["(", "cat", "AND", "dog", ")", "OR", "bird"]
+        assert result == expected
+
+    def test_list_union(self):
+        postings1 = [1, 3, 5]
+        postings2 = [2, 3, 4]
+        result = list_union(postings1, postings2)
+        expected = [1, 2, 3, 4, 5]
+        assert result == expected
+
+    def test_list_diff(self):
+        postings1 = [1, 2, 3, 4, 5]
+        postings2 = [2, 4]
+        result = list_diff(postings1, postings2)
+        expected = [1, 3, 5]
+        assert result == expected
+
+
 class TestFindDocsAND:
     def test_and_with_common_elements(self):
         postings1 = PostingList(
-            postings=np.array([1, 3, 5, 7, 9]),
+            postings=[1, 3, 5, 7, 9],
             term_frequencies={1: 2, 3: 1, 5: 3, 7: 1, 9: 2},
-            positions={1: np.array([0, 5]), 3: np.array([2]), 5: np.array([1, 3, 7]), 7: np.array([4]), 9: np.array([6, 8])}
+            positions={1: [0, 5], 3: [2], 5: [1, 3, 7], 7: [4], 9: [6, 8]}
         )
         postings2 = PostingList(
-            postings=np.array([2, 3, 5, 8, 10]),
+            postings=[2, 3, 5, 8, 10],
             term_frequencies={2: 1, 3: 2, 5: 1, 8: 1, 10: 1},
-            positions={2: np.array([1]), 3: np.array([0, 4]), 5: np.array([2]), 8: np.array([3]), 10: np.array([5])}
+            positions={2: [1], 3: [0, 4], 5: [2], 8: [3], 10: [5]}
         )
         result = QueryEngine._find_docs(postings1, postings2, "AND")
         
-        expected = np.array([3, 5])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [3, 5]
+        assert result.postings == expected
         assert result.term_frequencies[3] == 3
         assert result.term_frequencies[5] == 4
     
     def test_and_with_no_common_elements(self):
         postings1 = PostingList(
-            postings=np.array([1, 3, 5]),
+            postings=[1, 3, 5],
             term_frequencies={1: 1, 3: 1, 5: 1},
-            positions={1: np.array([0]), 3: np.array([1]), 5: np.array([2])}
+            positions={1: [0], 3: [1], 5: [2]}
         )
         postings2 = PostingList(
-            postings=np.array([2, 4, 6]),
+            postings=[2, 4, 6],
             term_frequencies={2: 1, 4: 1, 6: 1},
-            positions={2: np.array([0]), 4: np.array([1]), 6: np.array([2])}
+            positions={2: [0], 4: [1], 6: [2]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
@@ -311,113 +339,113 @@ class TestFindDocsAND:
     
     def test_and_with_all_common_elements(self):
         postings1 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 2, 2: 1, 3: 3},
-            positions={1: np.array([0, 5]), 2: np.array([1]), 3: np.array([2, 4, 6])}
+            positions={1: [0, 5], 2: [1], 3: [2, 4, 6]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 2, 3: 1},
-            positions={1: np.array([3]), 2: np.array([7, 9]), 3: np.array([8])}
+            positions={1: [3], 2: [7, 9], 3: [8]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
         
         result = QueryEngine._find_docs(postings1, postings2, "AND")
         
-        expected = np.array([1, 2, 3])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3]
+        assert result.postings == expected
         assert result.term_frequencies[1] == 3
         assert result.term_frequencies[2] == 3
         assert result.term_frequencies[3] == 4
     
     def test_and_skip_pointers_optimization(self):
         postings1 = PostingList(
-            postings=np.array([1, 5, 10, 15, 20, 25, 30]),
+            postings=[1, 5, 10, 15, 20, 25, 30],
             term_frequencies={1: 1, 5: 1, 10: 1, 15: 1, 20: 1, 25: 1, 30: 1},
-            positions={i: np.array([0]) for i in [1, 5, 10, 15, 20, 25, 30]}
+            positions={i: [0] for i in [1, 5, 10, 15, 20, 25, 30]}
         )
         postings2 = PostingList(
-            postings=np.array([3, 5, 7, 10, 12, 15, 18, 20]),
+            postings=[3, 5, 7, 10, 12, 15, 18, 20],
             term_frequencies={3: 1, 5: 1, 7: 1, 10: 1, 12: 1, 15: 1, 18: 1, 20: 1},
-            positions={i: np.array([0]) for i in [3, 5, 7, 10, 12, 15, 18, 20]}
+            positions={i: [0] for i in [3, 5, 7, 10, 12, 15, 18, 20]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
         
         result = QueryEngine._find_docs(postings1, postings2, "AND")
         
-        expected = np.array([5, 10, 15, 20])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [5, 10, 15, 20]
+        assert result.postings == expected
 
 
 class TestFindDocsOR:
     def test_or_with_common_elements(self):
         postings1 = PostingList(
-            postings=np.array([1, 3, 5, 7, 9]),
+            postings=[1, 3, 5, 7, 9],
             term_frequencies={1: 1, 3: 2, 5: 1, 7: 1, 9: 1},
-            positions={1: np.array([0]), 3: np.array([1, 3]), 5: np.array([2]), 7: np.array([4]), 9: np.array([5])}
+            positions={1: [0], 3: [1, 3], 5: [2], 7: [4], 9: [5]}
         )
         postings2 = PostingList(
-            postings=np.array([2, 3, 5, 8, 10]),
+            postings=[2, 3, 5, 8, 10],
             term_frequencies={2: 1, 3: 1, 5: 2, 8: 1, 10: 1},
-            positions={2: np.array([0]), 3: np.array([6]), 5: np.array([7, 9]), 8: np.array([8]), 10: np.array([10])}
+            positions={2: [0], 3: [6], 5: [7, 9], 8: [8], 10: [10]}
         )
         result = QueryEngine._find_docs(postings1, postings2, "OR")
         
-        expected = np.array([1, 2, 3, 5, 7, 8, 9, 10])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3, 5, 7, 8, 9, 10]
+        assert result.postings == expected
         assert result.term_frequencies[3] == 3
         assert result.term_frequencies[5] == 3
     
     def test_or_with_no_common_elements(self):
         postings1 = PostingList(
-            postings=np.array([1, 3, 5]),
+            postings=[1, 3, 5],
             term_frequencies={1: 1, 3: 1, 5: 1},
-            positions={1: np.array([0]), 3: np.array([1]), 5: np.array([2])}
+            positions={1: [0], 3: [1], 5: [2]}
         )
         postings2 = PostingList(
-            postings=np.array([2, 4, 6]),
+            postings=[2, 4, 6],
             term_frequencies={2: 1, 4: 1, 6: 1},
-            positions={2: np.array([0]), 4: np.array([1]), 6: np.array([2])}
+            positions={2: [0], 4: [1], 6: [2]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
         
         result = QueryEngine._find_docs(postings1, postings2, "OR")
         
-        expected = np.array([1, 2, 3, 4, 5, 6])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3, 4, 5, 6]
+        assert result.postings == expected
     
     def test_or_with_all_common_elements(self):
         postings1 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+            positions={1: [0], 2: [1], 3: [2]}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([3]), 2: np.array([4]), 3: np.array([5])}
+            positions={1: [3], 2: [4], 3: [5]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
         
         result = QueryEngine._find_docs(postings1, postings2, "OR")
         
-        expected = np.array([1, 2, 3])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3]
+        assert result.postings == expected
 
 
 class TestFindDocsNOT:
     def test_not_operation_basic_difference(self):
         postings1 = PostingList(
-            postings=np.array([2, 4, 6, 8]),
+            postings=[2, 4, 6, 8],
             term_frequencies={2: 1, 4: 1, 6: 1, 8: 1},
             positions={}
         )
         postings2 = PostingList(
-            postings=np.array([4, 8, 10]),
+            postings=[4, 8, 10],
             term_frequencies={4: 1, 8: 1, 10: 1},
             positions={}
         )
@@ -427,18 +455,18 @@ class TestFindDocsNOT:
 
         result = QueryEngine._find_docs(postings1, postings2, "NOT")
 
-        expected = np.array([2, 6])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [2, 6]
+        assert result.postings == expected
         assert set(result.term_frequencies.keys()) == {2, 6}
 
     def test_not_with_empty_right(self):
         postings1 = PostingList(
-            postings=np.array([1, 2, 3, 4]),
+            postings=[1, 2, 3, 4],
             term_frequencies={1: 1, 2: 1, 3: 1, 4: 1},
             positions={}
         )
         postings2 = PostingList(
-            postings=np.array([]),
+            postings=[],
             term_frequencies={},
             positions={}
         )
@@ -448,18 +476,18 @@ class TestFindDocsNOT:
 
         result = QueryEngine._find_docs(postings1, postings2, "NOT")
 
-        expected = np.array([1, 2, 3, 4])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3, 4]
+        assert result.postings == expected
         assert len(result.term_frequencies) == 4
 
     def test_not_with_empty_left(self):
         postings1 = PostingList(
-            postings=np.array([]),
+            postings=[],
             term_frequencies={},
             positions={}
         )
         postings2 = PostingList(
-            postings=np.array([1, 2, 3, 4]),
+            postings=[1, 2, 3, 4],
             term_frequencies={1: 1, 2: 1, 3: 1, 4: 1},
             positions={}
         )
@@ -469,17 +497,17 @@ class TestFindDocsNOT:
 
         result = QueryEngine._find_docs(postings1, postings2, "NOT")
 
-        expected = np.array([])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = []
+        assert result.postings == expected
         assert len(result.term_frequencies) == 0
 
 
 class TestEvaluate:
     def test_evaluate_leaf_node(self, mock_inverted_index):
         posting_list = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+            positions={1: [0], 2: [1], 3: [2]}
         )
         mock_inverted_index.index.get.return_value = posting_list
         
@@ -492,14 +520,14 @@ class TestEvaluate:
     def test_evaluate_and_node(self, mock_inverted_index):
         mock_inverted_index.index.get.side_effect = [
             PostingList(
-                postings=np.array([1, 2, 3]),
+                postings=[1, 2, 3],
                 term_frequencies={1: 1, 2: 1, 3: 1},
-                positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+                positions={1: [0], 2: [1], 3: [2]}
             ),
             PostingList(
-                postings=np.array([2, 3, 4]),
+                postings=[2, 3, 4],
                 term_frequencies={2: 1, 3: 1, 4: 1},
-                positions={2: np.array([0]), 3: np.array([1]), 4: np.array([2])}
+                positions={2: [0], 3: [1], 4: [2]}
             )
         ]
         
@@ -509,20 +537,20 @@ class TestEvaluate:
         
         result = QueryEngine._bool_search(and_node)
         
-        expected = np.array([2, 3])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [2, 3]
+        assert result.postings == expected
     
     def test_evaluate_or_node(self, mock_inverted_index):
         mock_inverted_index.index.get.side_effect = [
             PostingList(
-                postings=np.array([1, 2]),
+                postings=[1, 2],
                 term_frequencies={1: 1, 2: 1},
-                positions={1: np.array([0]), 2: np.array([1])}
+                positions={1: [0], 2: [1]}
             ),
             PostingList(
-                postings=np.array([3, 4]),
+                postings=[3, 4],
                 term_frequencies={3: 1, 4: 1},
-                positions={3: np.array([0]), 4: np.array([1])}
+                positions={3: [0], 4: [1]}
             )
         ]
         
@@ -532,17 +560,17 @@ class TestEvaluate:
         
         result = QueryEngine._bool_search(or_node)
         
-        expected = np.array([1, 2, 3, 4])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2, 3, 4]
+        assert result.postings == expected
     
     def test_evaluate_and_not_node(self, mock_inverted_index):
         postings1 = PostingList(
-            postings=np.array([1, 2, 3, 4, 5]),
+            postings=[1, 2, 3, 4, 5],
             term_frequencies={i: 1 for i in [1, 2, 3, 4, 5]},
             positions={}
         )
         postings2 = PostingList(
-            postings=np.array([3, 4, 5, 6, 7]),
+            postings=[3, 4, 5, 6, 7],
             term_frequencies={i: 1 for i in [3, 4, 5, 6, 7]},
             positions={}
         )
@@ -566,27 +594,27 @@ class TestEvaluate:
 
         result = QueryEngine._bool_search(root)
 
-        expected = np.array([1, 2])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [1, 2]
+        assert result.postings == expected
         assert set(result.term_frequencies.keys()) == {1, 2}
     
     def test_evaluate_complex_query(self, mock_inverted_index):
         # (term1 AND term2) OR term3
         mock_inverted_index.index.get.side_effect = [
             PostingList(
-                postings=np.array([1, 2, 3]),
+                postings=[1, 2, 3],
                 term_frequencies={1: 1, 2: 1, 3: 1},
-                positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+                positions={1: [0], 2: [1], 3: [2]}
             ),
             PostingList(
-                postings=np.array([2, 3, 4]),
+                postings=[2, 3, 4],
                 term_frequencies={2: 1, 3: 1, 4: 1},
-                positions={2: np.array([0]), 3: np.array([1]), 4: np.array([2])}
+                positions={2: [0], 3: [1], 4: [2]}
             ),
             PostingList(
-                postings=np.array([5, 6]),
+                postings=[5, 6],
                 term_frequencies={5: 1, 6: 1},
-                positions={5: np.array([0]), 6: np.array([1])}
+                positions={5: [0], 6: [1]}
             )
         ]
         
@@ -598,21 +626,21 @@ class TestEvaluate:
         
         result = QueryEngine._bool_search(or_node)
         
-        expected = np.array([2, 3, 5, 6])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [2, 3, 5, 6]
+        assert result.postings == expected
 
 
 class TestSearchResults:
     def test_search_results_basic(self, mock_query_tree, mock_inverted_index):
         mock_inverted_index.index.get.return_value = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+            positions={1: [0], 2: [1], 3: [2]}
         )
         mock_inverted_index.doc_store.get.side_effect = [
-            {"url": "http://example.com/1", "title": "Doc 1"},
-            {"url": "http://example.com/2", "title": "Doc 2"},
-            {"url": "http://example.com/3", "title": "Doc 3"}
+            DocInfo(url="http://example.com/1", title="Doc 1"),
+            DocInfo(url="http://example.com/2", title="Doc 2"),
+            DocInfo(url="http://example.com/3", title="Doc 3")
         ]
         
         qe = QueryEngine("test")
@@ -624,12 +652,12 @@ class TestSearchResults:
     
     def test_search_results_with_limit(self, mock_query_tree, mock_inverted_index):
         mock_inverted_index.index.get.return_value = PostingList(
-            postings=np.array([1, 2, 3, 4, 5]),
+            postings=[1, 2, 3, 4, 5],
             term_frequencies={i: 1 for i in range(1, 6)},
-            positions={i: np.array([0]) for i in range(1, 6)}
+            positions={i: [0] for i in range(1, 6)}
         )
         mock_inverted_index.doc_store.get.side_effect = [
-            {"url": f"http://example.com/{i}", "title": f"Doc {i}"}
+            DocInfo(url=f"http://example.com/{i}", title=f"Doc {i}")
             for i in range(1, 6)
         ]
         
@@ -641,7 +669,7 @@ class TestSearchResults:
     
     def test_search_results_empty(self, mock_query_tree, mock_inverted_index):
         mock_inverted_index.index.get.return_value = PostingList(
-            postings=np.array([]),
+            postings=[],
             term_frequencies={},
             positions={}
         )
@@ -655,11 +683,11 @@ class TestSearchResults:
 
 class TestEdgeCases:
     def test_find_docs_empty_postings_and(self):
-        postings1 = PostingList(postings=np.array([]), term_frequencies={}, positions={})
+        postings1 = PostingList(postings=[], term_frequencies={}, positions={})
         postings2 = PostingList(
-            postings=np.array([1, 2, 3]),
+            postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
-            positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+            positions={1: [0], 2: [1], 3: [2]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
@@ -670,22 +698,22 @@ class TestEdgeCases:
     
     def test_find_docs_single_element(self):
         postings1 = PostingList(
-            postings=np.array([5]),
+            postings=[5],
             term_frequencies={5: 1},
-            positions={5: np.array([0])}
+            positions={5: [0]}
         )
         postings2 = PostingList(
-            postings=np.array([5]),
+            postings=[5],
             term_frequencies={5: 2},
-            positions={5: np.array([1, 3])}
+            positions={5: [1, 3]}
         )
         postings1.build_skip_pointers()
         postings2.build_skip_pointers()
         
         result = QueryEngine._find_docs(postings1, postings2, "AND")
         
-        expected = np.array([5])
-        np.testing.assert_array_equal(result.postings, expected)
+        expected = [5]
+        assert result.postings == expected
         assert result.term_frequencies[5] == 3
 
 
@@ -694,24 +722,24 @@ class TestIntegration:
         # (term1 AND term2) OR term3
         mock_inverted_index.index.get.side_effect = [
             PostingList(
-                postings=np.array([1, 2, 3]),
+                postings=[1, 2, 3],
                 term_frequencies={1: 1, 2: 1, 3: 1},
-                positions={1: np.array([0]), 2: np.array([1]), 3: np.array([2])}
+                positions={1: [0], 2: [1], 3: [2]}
             ),
             PostingList(
-                postings=np.array([2, 3, 4]),
+                postings=[2, 3, 4],
                 term_frequencies={2: 1, 3: 1, 4: 1},
-                positions={2: np.array([0]), 3: np.array([1]), 4: np.array([2])}
+                positions={2: [0], 3: [1], 4: [2]}
             ),
             PostingList(
-                postings=np.array([5]),
+                postings=[5],
                 term_frequencies={5: 1},
-                positions={5: np.array([0])}
+                positions={5: [0]}
             )
         ]
         
         mock_inverted_index.doc_store.get.side_effect = [
-            {"url": f"http://example.com/{i}", "title": f"Document {i}"}
+            DocInfo(url=f"http://example.com/{i}", title=f"Doc {i}")
             for i in [2, 3, 5]
         ]
         

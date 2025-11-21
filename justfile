@@ -19,6 +19,18 @@ local *uvicorn-args:
     chmod +x local.sh
     ./local.sh {{uvicorn-args}}
 
+build-index memory-limit="1024":
+    cd src/backend/search_engine/scripts && \
+    chmod +x build-index.sh && \
+    ./build-index.sh {{memory-limit}}
+
+# from installed package
+# caution, will override existing stubs
+generate-stubs:
+    cd src/backend/bindings/ && \
+    chmod +x generate-stubs.sh && \
+    ./generate-stubs.sh
+
 lint:
     @echo "Linting with Ruff..."
     cd src/backend && uv run ruff check api/ search_engine/
@@ -32,5 +44,5 @@ mypy:
     cd src/backend && uv run mypy api/
     cd src/backend && uv run mypy search_engine/
 
-test *args:
-    just -f tests/justfile test {{args}}
+test:
+    just -f tests/justfile test

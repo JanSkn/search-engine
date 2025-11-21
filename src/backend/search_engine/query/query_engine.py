@@ -1,8 +1,12 @@
 from typing import Literal
-import numpy as np
-from backend.search_engine.models.index import PostingList, SearchResult
-from backend.search_engine.indexer.index_builder import lemmatize_search_query
-from backend.search_engine.index.inverted_index import InvertedIndex
+from backend.search_engine.index.index_loader import get_index
+from backend.search_engine.models.index import SearchResult
+from cpp_utils import (  # type: ignore [import-untyped]
+    normalize_search_query,
+    list_union,
+    list_diff,
+    PostingList,
+)
 from backend.search_engine.query.query_preprocessing import (
     Node,
     QueryTree,
@@ -15,17 +19,15 @@ from backend.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-inverted_index = InvertedIndex()
+inverted_index = get_index()
 
 
-# TODO STILL NOT FILTERING STOP WORDS IN QUERY AND INDEX, make sure to do for both otherwise errors
-# TODO depending on postings size directly sorting list in place faster than conversion to numpy?
 class QueryEngine:
     def __init__(self, q: str) -> None:
         self._query = q
 
     def _normalized_query(self) -> list[str]:
-        return lemmatize_search_query(self._query)
+        return normalize_search_query(self._query)
 
     @staticmethod
     def _positional_intersect(
@@ -58,14 +60,13 @@ class QueryEngine:
                     valid_positions = []
                     for pos_a in positions_1:
                         # Check if term2 appears at pos_a + distance
-                        # TODO positions_2 to set for faster lookup?
                         if (pos_a + distance) in positions_2:
                             valid_positions.append(pos_a)
 
                     if valid_positions:
                         doc_ids.append(doc_id)
                         result_tf[doc_id] = len(valid_positions)
-                        result_pos[doc_id] = np.array(valid_positions)
+                        result_pos[doc_id] = valid_positions
 
                 i += 1
                 j += 1
@@ -81,7 +82,7 @@ class QueryEngine:
                     j += 1
 
         res = PostingList(
-            postings=np.array(doc_ids), term_frequencies=result_tf, positions=result_pos
+            postings=doc_ids, term_frequencies=result_tf, positions=result_pos
         )
         res.build_skip_pointers()
 
@@ -89,21 +90,19 @@ class QueryEngine:
 
     def _positional_phrase_search(self, terms: list[str]) -> PostingList:
         if not terms:
-            return PostingList(postings=np.array([]), term_frequencies={}, positions={})
+            return PostingList(postings=[], term_frequencies={}, positions={})
 
         result = inverted_index.index.get(terms[0])
 
         if result is None:
-            return PostingList(postings=np.array([]), term_frequencies={}, positions={})
+            return PostingList(postings=[], term_frequencies={}, positions={})
 
         # for each subsequent term, check positions
         for i, term in enumerate(terms[1:], start=1):
             next_pl = inverted_index.index.get(term)
 
             if next_pl is None:
-                return PostingList(
-                    postings=np.array([]), term_frequencies={}, positions={}
-                )
+                return PostingList(postings=[], term_frequencies={}, positions={})
 
             result = self._positional_intersect(result, next_pl, distance=i)
             if len(result.postings) == 0:
@@ -152,14 +151,14 @@ class QueryEngine:
                         j += 1
 
             res = PostingList(
-                postings=np.array(and_doc_ids),
+                postings=and_doc_ids,
                 term_frequencies=result_tf,
                 positions={},
             )
             res.build_skip_pointers()
             return res
         elif mode == "OR":
-            or_doc_ids = np.union1d(postings_1, postings_2)
+            or_doc_ids = list_union(postings_1, postings_2)
             result_tf = {}
 
             for doc_id in or_doc_ids:
@@ -173,11 +172,9 @@ class QueryEngine:
         else:  # NOT
             if len(posting_list_1.postings) == 0:
                 # no base documents
-                return PostingList(
-                    postings=np.array([]), term_frequencies={}, positions={}
-                )
+                return PostingList(postings=[], term_frequencies={}, positions={})
 
-            result_docs = np.setdiff1d(posting_list_1.postings, posting_list_2.postings)
+            result_docs = list_diff(postings_1, postings_2)  # TODO check correct order
             result_tf = {
                 doc_id: posting_list_1.term_frequencies.get(doc_id, 0)
                 for doc_id in result_docs
@@ -192,14 +189,12 @@ class QueryEngine:
     @staticmethod
     def _bool_search(node: Node | None) -> PostingList:
         if node is None:
-            return PostingList(postings=np.array([]), term_frequencies={}, positions={})
+            return PostingList(postings=[], term_frequencies={}, positions={})
 
         if node.value not in AND | OR | NOT:
             pl = inverted_index.index.get(node.value)
             if pl is None:
-                return PostingList(
-                    postings=np.array([]), term_frequencies={}, positions={}
-                )
+                return PostingList(postings=[], term_frequencies={}, positions={})
             return pl
 
         elif node.value in AND:
@@ -255,16 +250,19 @@ class QueryEngine:
         if posting_lists is None or len(posting_lists.postings) == 0:
             return []
 
+        if posting_lists is None or len(posting_lists.postings) == 0:
+            return []
+
         search_results = []
         for doc_id in posting_lists.postings[:limit]:
             doc_data = inverted_index.doc_store.get(doc_id)
             if doc_data is None:
                 continue
 
-            url = doc_data.get("url")
+            url = doc_data.url
             if url is None:
                 continue
-            title = doc_data.get("title", "Untitled")
+            title = doc_data.title or "Untitled"
 
             try:
                 search_result = SearchResult(
