@@ -12,7 +12,14 @@
 #include <queue>
 #include <memory>
 #include <filesystem>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
 #include "libstemmer.h"
+
+// NOTE: build and read on same architecture (endianness, size of types)
 
 namespace fs = std::filesystem;
 
@@ -224,6 +231,49 @@ struct PostingList {
     }
 };
 
+class MMapReader {
+public:
+    const char* data;
+    size_t size;
+    int fd;
+
+    MMapReader(const std::string& filename) {
+        fd = open(filename.c_str(), O_RDONLY);
+        if (fd == -1) throw std::runtime_error("Could not open file for mmap");
+
+        struct stat sb;
+        if (fstat(fd, &sb) == -1) throw std::runtime_error("Could not stat file");
+        size = sb.st_size;
+
+        if (size == 0) {
+            data = nullptr;
+            return;
+        }
+
+        void* mapped = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (mapped == MAP_FAILED) throw std::runtime_error("mmap failed");
+
+        data = static_cast<const char*>(mapped);
+        madvise(mapped, size, MADV_SEQUENTIAL);
+    }
+
+    ~MMapReader() {
+        if (data) munmap(const_cast<char*>(data), size);
+        if (fd != -1) close(fd);
+    }
+    
+    MMapReader(const MMapReader&) = delete;
+    MMapReader& operator=(const MMapReader&) = delete;
+};
+
+template <typename T>
+T read_val(const char*& ptr) {
+    T val;
+    std::memcpy(&val, ptr, sizeof(T));
+    ptr += sizeof(T);
+    return val;
+}
+
 uint64_t write_posting_list(std::ofstream& out, const PostingList& pl, bool with_skip_pointers = false) {
     /*
     with_skip_pointers: we don't need skip pointers for temp spilling to disk, only for final index
@@ -280,25 +330,25 @@ uint64_t write_posting_list(std::ofstream& out, const PostingList& pl, bool with
     return offset;
 }
 
-PostingList read_posting_list(std::ifstream& in, uint64_t offset) {
+PostingList read_posting_list(const char*& ptr) {
     PostingList pl;
-    in.seekg(offset);
     
-    uint32_t count_docs;
-    in.read(reinterpret_cast<char*>(&count_docs), sizeof(count_docs));
+    uint32_t count_docs = read_val<uint32_t>(ptr);
     pl.postings.resize(count_docs);
     
     for (uint32_t i = 0; i < count_docs; i++) {
-        uint32_t doc_id, tf, pos_count;
-        in.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id));
-        in.read(reinterpret_cast<char*>(&tf), sizeof(tf));
-        in.read(reinterpret_cast<char*>(&pos_count), sizeof(pos_count));
+        uint32_t doc_id = read_val<uint32_t>(ptr);
+        uint32_t tf = read_val<uint32_t>(ptr);
+        uint32_t pos_count = read_val<uint32_t>(ptr);
         
         pl.postings[i] = doc_id;
         pl.term_frequencies[doc_id] = tf;
         
         std::vector<uint32_t> positions(pos_count);
-        in.read(reinterpret_cast<char*>(positions.data()), pos_count * sizeof(uint32_t));
+
+        std::memcpy(positions.data(), ptr, pos_count * sizeof(uint32_t));
+        ptr += pos_count * sizeof(uint32_t);
+        
         pl.positions[doc_id] = std::move(positions);
     }
     
@@ -307,7 +357,7 @@ PostingList read_posting_list(std::ifstream& in, uint64_t offset) {
 
 struct MergeState {
     std::string term;
-    uint64_t offset;
+    const char* current_ptr;
     int file_index;
 
      // std::priority_queue is max-heap by default, so we invert the comparison
@@ -462,8 +512,10 @@ public:
         fs::rename(temp_docstore_base + ".docstore_offsets", output_file_base + ".docstore_offsets");
 
         std::cout << "Merging " << spilled_files.size() << " spilled files using Priority Queue..." << std::endl;
-        
-        std::vector<std::unique_ptr<std::ifstream>> files; 
+        auto merge_start = std::chrono::high_resolution_clock::now();
+
+        std::vector<std::unique_ptr<MMapReader>> readers;
+        std::vector<const char*> file_ptrs;  // track current position per file
 
         // queue is max-heap by default, implement min-heap by inverting comparison with MergeState::operator>
         std::priority_queue<MergeState, std::vector<MergeState>, std::greater<MergeState>> merge_queue;
@@ -473,23 +525,32 @@ public:
         // result: smallest term per file, so if e.g. "and" is smallest for 8/10 files, "or" for 2 files,
         // we have 8 entries with "and" and 2 with "or" in the queue
         for (size_t i = 0; i < spilled_files.size(); ++i) {
-            const auto& filename = spilled_files[i];
-            auto file = std::make_unique<std::ifstream>(filename, std::ios::binary);
-            files.push_back(std::move(file));
+            readers.push_back(std::make_unique<MMapReader>(spilled_files[i]));
             
-            uint32_t term_count;
-            // current file
-            files.back()->read(reinterpret_cast<char*>(&term_count), sizeof(term_count));
-            
-            if (term_count > 0) {
-                uint32_t term_len;
-                files.back()->read(reinterpret_cast<char*>(&term_len), sizeof(term_len));
-                std::string term(term_len, '\0');
-                files.back()->read(&term[0], term_len);
+            const char* ptr = readers.back()->data; // start of file
+            const char* end = ptr + readers.back()->size; // end of file
+
+            // every spill file starts with uint32_t term_count
+            // --> check that not empty
+            if (ptr + sizeof(uint32_t) <= end) {
+                uint32_t term_count = read_val<uint32_t>(ptr);
                 
-                // add first term of this file to the queue
-                merge_queue.push({term, (uint64_t)files.back()->tellg(), (int)i});
+                if (term_count > 0 && ptr + sizeof(uint32_t) <= end) {
+                    // read first term
+                    uint32_t term_len = read_val<uint32_t>(ptr);
+                    if (ptr + term_len <= end) {
+                        std::string term(ptr, term_len);
+                        ptr += term_len;
+
+                        merge_queue.push({term, ptr, (int)i});
+                        file_ptrs.push_back(ptr);
+                        continue;
+                    }
+                }
             }
+
+            // if file is empty or malformed, track it as exhausted
+            file_ptrs.push_back(nullptr);
         }
         
         // merging process
@@ -498,7 +559,6 @@ public:
         
         uint64_t term_counter = 0;
         
-        auto merge_start = std::chrono::high_resolution_clock::now();
         while (!merge_queue.empty()) {
             MergeState min_state = merge_queue.top();
             merge_queue.pop();
@@ -508,39 +568,46 @@ public:
             if (term_counter % 100000 == 0) {
                 auto now = std::chrono::high_resolution_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - merge_start).count();
-                std::cout << "Merged " << term_counter << " terms. Elapsed: " << elapsed << "s" << std::endl;
+                std::cout << "Merged " << term_counter << " terms..."
+                        << " | elapsed time: " << elapsed << " s" << std::endl;
             }
             
             PostingList merged_pl;
-            
-            // process all entries in the queue that have the same min_term
-            do { // as long as the next top term in the queue is still min_term
+
+            do {
                 int file_idx = min_state.file_index;
                 
-                PostingList pl = read_posting_list(*files[file_idx], min_state.offset);
+                const char* ptr = min_state.current_ptr;
                 
-                if (merged_pl.postings.empty()) {
-                    merged_pl = std::move(pl);
-                } else {
-                    merged_pl = PostingList::merge(merged_pl, pl);
+                PostingList pl = read_posting_list(ptr);
+
+                if (merged_pl.postings.empty()) merged_pl = std::move(pl);
+                else merged_pl = PostingList::merge(merged_pl, pl);
+
+                const char* end = readers[file_idx]->data + readers[file_idx]->size;
+
+                // after every postinglist comes next term length (uint32_t) + term if there is a next term
+                if (ptr + sizeof(uint32_t) <= end) {
+                    uint32_t term_len;
+                    std::memcpy(&term_len, ptr, sizeof(uint32_t));
+                    
+                    if (ptr + sizeof(uint32_t) + term_len <= end) {
+                        
+                        ptr += sizeof(uint32_t);
+                        std::string next_term(ptr, term_len);
+                        ptr += term_len;
+                        
+                        merge_queue.push({next_term, ptr, file_idx});
+                    }
                 }
 
-                // read next term from this file and push to queue
-                uint32_t term_len;
-                if (files[file_idx]->read(reinterpret_cast<char*>(&term_len), sizeof(term_len))) {
-                    std::string next_term(term_len, '\0');
-                    files[file_idx]->read(&next_term[0], term_len);
-                    
-                    merge_queue.push({next_term, (uint64_t)files[file_idx]->tellg(), file_idx});
-                }
-                
-                // next term is not min_term anymore --> we cannot merge further from this file, break
                 if (merge_queue.empty() || merge_queue.top().term != min_term) break;
-                
+
                 min_state = merge_queue.top();
                 merge_queue.pop();
+
             } while (true);
-            
+
             merged_pl.build_skip_pointers();
             uint64_t offset = write_posting_list(postings_out, merged_pl, true);
             
@@ -549,9 +616,11 @@ public:
             index_out.write(min_term.data(), term_len);
             index_out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
         }
-        
+
         postings_out.close();
         index_out.close();
+        readers.clear();
+   
         auto merge_end = std::chrono::high_resolution_clock::now();
         auto total_elapsed = std::chrono::duration_cast<std::chrono::seconds>(merge_end - merge_start).count();
         std::cout << "Merging finished. Total terms: " << term_counter 

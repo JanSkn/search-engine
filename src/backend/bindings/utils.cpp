@@ -226,13 +226,16 @@ public:
         : index(this)
     {
         std::ifstream index_file(base_path + "/inverted_index.index", std::ios::binary);
-        while (index_file.peek() != EOF) {
+        while (true) {
             uint32_t term_len;
-            index_file.read(reinterpret_cast<char*>(&term_len), sizeof(term_len));
+            if (!index_file.read(reinterpret_cast<char*>(&term_len), sizeof(term_len))) break;
+
             std::string term(term_len, '\0');
-            index_file.read(&term[0], term_len);
+            if (!index_file.read(&term[0], term_len)) break;
+
             uint64_t offset;
-            index_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+            if (!index_file.read(reinterpret_cast<char*>(&offset), sizeof(offset))) break;
+
             term_to_offset[term] = offset;
         }
 
