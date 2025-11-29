@@ -31,12 +31,17 @@ def open_stream(tsv_gz: str) -> io.BufferedReader:
             return open(tsv_gz, "rb")
 
 
-def convert_to_gzip(in_stream: io.BufferedReader, out_path: str, max_lines: int = None, chunk_size: int = 1024*1024) -> int:
+def convert_to_gzip(
+    in_stream: io.BufferedReader,
+    out_path: str,
+    max_lines: int = None,
+    chunk_size: int = 1024 * 1024,
+) -> int:
     count = 0
-    
+
     with gzip.open(out_path, "wb", compresslevel=6) as f_out:
         buffer = b""
-        
+
         with tqdm(desc="Converting", unit="lines", mininterval=0.5) as pbar:
             while True:
                 # Read in chunks for better performance
@@ -53,22 +58,22 @@ def convert_to_gzip(in_stream: io.BufferedReader, out_path: str, max_lines: int 
                                 if max_lines is not None and count >= max_lines:
                                     return count
                     break
-                
+
                 buffer += chunk
                 lines = buffer.split(b"\n")
-                
+
                 # keep last incomplete line in buffer
                 buffer = lines[-1]
-                
+
                 # process complete lines
                 for line in lines[:-1]:
                     f_out.write(line + b"\n")
                     count += 1
                     pbar.update(1)
-                    
+
                     if max_lines is not None and count >= max_lines:
                         return count
-    
+
     return count
 
 
@@ -83,16 +88,13 @@ def main():
         help=f"Output path (gzipped TSV). Default: {OUT_PATH}",
     )
     ap.add_argument(
-        "--n", 
-        type=int, 
-        default=None, 
-        help="Number of lines to process (default: all)"
+        "--n", type=int, default=None, help="Number of lines to process (default: all)"
     )
     ap.add_argument(
         "--chunk-size",
         type=int,
-        default=1024*1024,
-        help="Read chunk size in bytes (default: 1MB)"
+        default=1024 * 1024,
+        help="Read chunk size in bytes (default: 1MB)",
     )
     args = ap.parse_args()
 
@@ -101,11 +103,14 @@ def main():
         print(f"Processing first {args.n:,} lines", file=sys.stderr)
     else:
         print(f"Processing all lines", file=sys.stderr)
-    
+
     with open_stream(args.tsv) as in_stream:
-        count = convert_to_gzip(in_stream, args.out, max_lines=args.n, chunk_size=args.chunk_size)
-    
+        count = convert_to_gzip(
+            in_stream, args.out, max_lines=args.n, chunk_size=args.chunk_size
+        )
+
     print(f"Done. Wrote {count:,} lines to: {args.out}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

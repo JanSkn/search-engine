@@ -16,7 +16,7 @@ install:
     just install-backend
 
 local *uvicorn-args:
-    chmod +x local.sh
+    chmod +x local.sh && \
     ./local.sh {{uvicorn-args}}
 
 build-index memory-limit="1024":

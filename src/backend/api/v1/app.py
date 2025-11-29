@@ -1,21 +1,27 @@
 from typing import Annotated
+import os
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.logging_config import get_logger
+from backend.logging_config import setup_logging, get_logger
 from backend.search_engine.models.index import SearchResult
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.query.query_engine import QueryEngine
 from backend.search_engine.error_handling import InvalidOperatorError
 
+setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.debug("Loading search index...")
+    start = time.time()
     app.state.inverted_index = get_index()
+    end = time.time()
+    logger.debug(f"Search index loaded in {end - start}s")
     yield
     logger.debug("Shutting down...")
 

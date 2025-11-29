@@ -124,36 +124,41 @@ SnowballStemmer stemmer;
 
 struct PostingList {
     std::vector<uint32_t> postings;
-    std::unordered_map<uint32_t, uint32_t> term_frequencies;
-    std::unordered_map<uint32_t, std::vector<uint32_t>> positions;
+    std::vector<uint32_t> term_frequencies;
+    std::vector<std::vector<uint32_t>> positions;
     std::unordered_map<uint32_t, uint32_t> skip_pointers;
     
     size_t add_document_occurrences(uint32_t doc_id, const std::vector<uint32_t>& new_positions) {
-        size_t memory_delta = 0;
+    size_t memory_delta = 0;
 
-        if (term_frequencies.find(doc_id) == term_frequencies.end()) {
-            // document does not exist yet, initialize
-            postings.push_back(doc_id);
-            term_frequencies[doc_id] = 0;
-            
-            memory_delta += sizeof(uint32_t); // postings vec
-            memory_delta += MAP_NODE_OVERHEAD + sizeof(uint32_t) * 2; // TF map node (key+val)
-            memory_delta += MAP_NODE_OVERHEAD + sizeof(uint32_t) + VECTOR_OVERHEAD; // pos map node + vec struct
-        }
+    if (!postings.empty() && postings.back() == doc_id) {
+        // existing last doc: extend its positions vector
+        term_frequencies.back() += new_positions.size();
+        auto& pos_vec = positions.back();
 
-        term_frequencies[doc_id] += new_positions.size();
-        
-        auto& pos_vec = positions[doc_id];
-        if (pos_vec.empty()) {
-            pos_vec.reserve(new_positions.size());
-        }
+        size_t old_cap = pos_vec.capacity();
+        pos_vec.insert(pos_vec.end(), new_positions.begin(), new_positions.end());
+        size_t new_cap = pos_vec.capacity();
+
+        memory_delta += (new_cap - old_cap) * sizeof(uint32_t);
+    } else {
+        // new doc entry
+        postings.push_back(doc_id);
+        term_frequencies.push_back(new_positions.size());
+
+        positions.emplace_back();
+        auto& pos_vec = positions.back();
+        pos_vec.reserve(new_positions.size());
         pos_vec.insert(pos_vec.end(), new_positions.begin(), new_positions.end());
 
-        // add memory for the actual integers in the position vector
-        memory_delta += new_positions.size() * sizeof(uint32_t);
-
-        return memory_delta;
+        memory_delta += sizeof(uint32_t) * 2; // doc_id + tf (stored elsewhere)
+        memory_delta += VECTOR_OVERHEAD; // vector structure overhead
+        memory_delta += pos_vec.capacity() * sizeof(uint32_t);
     }
+
+    return memory_delta;
+}
+
     
     void build_skip_pointers() {
         if (postings.empty()) return;
@@ -172,61 +177,61 @@ struct PostingList {
         
         // reserve memory to avoid reallocations
         result.postings.reserve(a.postings.size() + b.postings.size());
+        result.term_frequencies.reserve(a.term_frequencies.size() + b.term_frequencies.size());
+        result.positions.reserve(a.positions.size() + b.positions.size());
 
-        while (i < a.postings.size() && j < b.postings.size()) {
-            if (a.postings[i] < b.postings[j]) {
-                result.postings.push_back(a.postings[i]);
-                result.term_frequencies[a.postings[i]] = a.term_frequencies.at(a.postings[i]);
-                result.positions[a.postings[i]] = a.positions.at(a.postings[i]);
+        while (i < a.postings.size() || j < b.postings.size()) {
+            
+            uint32_t doc_id_a = (i < a.postings.size()) ? a.postings[i] : UINT32_MAX;
+            uint32_t doc_id_b = (j < b.postings.size()) ? b.postings[j] : UINT32_MAX;
+
+            if (doc_id_a < doc_id_b) {
+                result.postings.push_back(doc_id_a);
+                result.term_frequencies.push_back(a.term_frequencies[i]);
+                result.positions.push_back(a.positions[i]);
                 i++;
-            } else if (a.postings[i] > b.postings[j]) {
-                result.postings.push_back(b.postings[j]);
-                result.term_frequencies[b.postings[j]] = b.term_frequencies.at(b.postings[j]);
-                result.positions[b.postings[j]] = b.positions.at(b.postings[j]);
+            } else if (doc_id_b < doc_id_a) {
+                result.postings.push_back(doc_id_b);
+                result.term_frequencies.push_back(b.term_frequencies[j]);
+                result.positions.push_back(b.positions[j]);
+                j++;
+            } else if (doc_id_a != UINT32_MAX) {
+                uint32_t doc_id = doc_id_a;
+                result.postings.push_back(doc_id);
+                
+                result.term_frequencies.push_back(a.term_frequencies[i] + b.term_frequencies[j]);
+                
+                std::vector<uint32_t> pos_a = a.positions[i];
+                const auto& pos_b = b.positions[j];
+                pos_a.insert(pos_a.end(), pos_b.begin(), pos_b.end());
+                result.positions.push_back(std::move(pos_a));
+
+                i++;
                 j++;
             } else {
-                // same doc_id - merge
-                uint32_t doc_id = a.postings[i];
-                result.postings.push_back(doc_id);
-                result.term_frequencies[doc_id] = 
-                    a.term_frequencies.at(doc_id) + b.term_frequencies.at(doc_id);
-                
-                auto pos_a = a.positions.at(doc_id);
-                auto pos_b = b.positions.at(doc_id);
-                pos_a.reserve(pos_a.size() + pos_b.size());
-                pos_a.insert(pos_a.end(), pos_b.begin(), pos_b.end());
-                result.positions[doc_id] = std::move(pos_a);
-                i++;
-                j++;
+                // both UINT32_MAX -> end
+                break;
             }
         }
-        
-        while (i < a.postings.size()) {
-            result.postings.push_back(a.postings[i]);
-            result.term_frequencies[a.postings[i]] = a.term_frequencies.at(a.postings[i]);
-            result.positions[a.postings[i]] = a.positions.at(a.postings[i]);
-            i++;
-        }
-        
-        while (j < b.postings.size()) {
-            result.postings.push_back(b.postings[j]);
-            result.term_frequencies[b.postings[j]] = b.term_frequencies.at(b.postings[j]);
-            result.positions[b.postings[j]] = b.positions.at(b.postings[j]);
-            j++;
-        }
-        
+                
         return result;
     }
     
     // estimate total memory size used for dumping logic
     size_t memory_size() const {
-        size_t size = postings.size() * sizeof(uint32_t);
-        size += term_frequencies.size() * (MAP_NODE_OVERHEAD + sizeof(uint32_t) * 2);
-        for (const auto& [doc_id, pos] : positions) {
-            size += MAP_NODE_OVERHEAD + sizeof(uint32_t) + VECTOR_OVERHEAD; // map node + vec struct
-            size += pos.size() * sizeof(uint32_t); // actual data
+        size_t size = 0;
+        
+        size += postings.capacity() * sizeof(uint32_t);
+        size += term_frequencies.capacity() * sizeof(uint32_t);
+        
+        size += positions.capacity() * VECTOR_OVERHEAD;
+        
+        for (const auto& pos : positions) {
+            size += pos.capacity() * sizeof(uint32_t); 
         }
+        
         size += skip_pointers.size() * (MAP_NODE_OVERHEAD + sizeof(uint32_t) * 2);
+        
         return size;
     }
 };
@@ -305,15 +310,15 @@ uint64_t write_posting_list(std::ofstream& out, const PostingList& pl, bool with
     uint32_t count_docs = pl.postings.size();
     out.write(reinterpret_cast<const char*>(&count_docs), sizeof(count_docs));
     
-    for (uint32_t doc_id : pl.postings) {
-        uint32_t tf = pl.term_frequencies.at(doc_id);
-        const auto& pos = pl.positions.at(doc_id);
+    for (size_t i = 0; i < count_docs; ++i) {
+        uint32_t doc_id = pl.postings[i];
+        uint32_t tf = pl.term_frequencies[i];
+        const auto& pos = pl.positions[i];
         
         out.write(reinterpret_cast<const char*>(&doc_id), sizeof(doc_id));
         out.write(reinterpret_cast<const char*>(&tf), sizeof(tf));
         
         uint32_t pos_count = pos.size();
-        // to know how many positions to read
         out.write(reinterpret_cast<const char*>(&pos_count), sizeof(pos_count));
         out.write(reinterpret_cast<const char*>(pos.data()), pos_count * sizeof(uint32_t));
     }
@@ -334,22 +339,23 @@ PostingList read_posting_list(const char*& ptr) {
     PostingList pl;
     
     uint32_t count_docs = read_val<uint32_t>(ptr);
-    pl.postings.resize(count_docs);
+    pl.postings.reserve(count_docs);
+    pl.term_frequencies.reserve(count_docs);
+    pl.positions.reserve(count_docs);
     
     for (uint32_t i = 0; i < count_docs; i++) {
         uint32_t doc_id = read_val<uint32_t>(ptr);
         uint32_t tf = read_val<uint32_t>(ptr);
         uint32_t pos_count = read_val<uint32_t>(ptr);
         
-        pl.postings[i] = doc_id;
-        pl.term_frequencies[doc_id] = tf;
+        pl.postings.push_back(doc_id);
+        pl.term_frequencies.push_back(tf);
         
         std::vector<uint32_t> positions(pos_count);
-
         std::memcpy(positions.data(), ptr, pos_count * sizeof(uint32_t));
         ptr += pos_count * sizeof(uint32_t);
         
-        pl.positions[doc_id] = std::move(positions);
+        pl.positions.push_back(std::move(positions));
     }
     
     return pl;
@@ -728,9 +734,10 @@ int main(int argc, char* argv[]) {
                 auto now = std::chrono::high_resolution_clock::now();
                 double chunk_sec = std::chrono::duration<double>(now - start_chunk).count();
                 double total_sec = std::chrono::duration<double>(now - start_read).count();
-                std::cout << "Processed " << doc_count << " documents. "
-                        << "Chunk time: " << chunk_sec << " s, "
-                        << "Total time: " << total_sec << " s" << std::endl;
+                double docs_per_sec = doc_count / total_sec;
+                std::cout << "Processed " << doc_count << " docs | "
+                        << "Chunk: " << chunk_sec << "s, Total: " << total_sec << "s | "
+                        << "Speed: " << (int)docs_per_sec << " docs/s" << std::endl;
                 start_chunk = now;
             }
         }
