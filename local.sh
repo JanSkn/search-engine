@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export LOG_LEVEL=DEBUG
+
 PIDS=()
 
 cd src

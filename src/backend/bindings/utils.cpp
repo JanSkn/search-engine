@@ -156,34 +156,50 @@ struct DocInfo {
 
 class DocStore {
 private:
-    std::unordered_map<uint32_t, DocInfo> store;
+    // files for disk access
+    mutable std::ifstream data_in;   
+    mutable std::ifstream offset_in;
+    uint32_t total_docs;
 
 public:
-    std::optional<DocInfo> get(uint32_t doc_id) {
-        auto it = store.find(doc_id);
-        if (it != store.end()) return it->second;
-        return std::nullopt;
-    }
+    DocStore() : total_docs(0) {}
 
-    void load(const std::string& filename) {
-        std::ifstream in(filename, std::ios::binary);
-        uint32_t count;
-        in.read(reinterpret_cast<char*>(&count), sizeof(count));
-        for (uint32_t i = 0; i < count; ++i) {
-            uint32_t url_len, title_len;
-            in.read(reinterpret_cast<char*>(&url_len), sizeof(url_len));
-            std::string url(url_len, '\0');
-            in.read(&url[0], url_len);
+    void open(const std::string& filename_base) {
+        data_in.open(filename_base + ".docstore", std::ios::binary);
+        offset_in.open(filename_base + ".docstore_offsets", std::ios::binary);
 
-            in.read(reinterpret_cast<char*>(&title_len), sizeof(title_len));
-            std::string title(title_len, '\0');
-            in.read(&title[0], title_len);
-
-            uint32_t doc_id;
-            in.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id));
-            store[doc_id] = {url, title};
+        if (!data_in || !offset_in) {
+            throw std::runtime_error("Could not open docstore files: " + filename_base);
         }
+
+        // first is number of total docs
+        data_in.read(reinterpret_cast<char*>(&total_docs), sizeof(total_docs));
     }
+
+    std::optional<DocInfo> get(uint32_t doc_id) {
+        if (doc_id >= total_docs) return std::nullopt;
+
+        // offset from offset file
+        uint64_t doc_offset;
+        offset_in.seekg(doc_id * sizeof(uint64_t));
+        if (!offset_in.read(reinterpret_cast<char*>(&doc_offset), sizeof(doc_offset))) return std::nullopt;
+
+        data_in.seekg(doc_offset);
+
+        uint32_t url_len;
+        if (!data_in.read(reinterpret_cast<char*>(&url_len), sizeof(url_len))) return std::nullopt;
+        std::string url(url_len, '\0');
+        if (!data_in.read(&url[0], url_len)) return std::nullopt;
+
+        uint32_t title_len;
+        if (!data_in.read(reinterpret_cast<char*>(&title_len), sizeof(title_len))) return std::nullopt;
+        std::string title(title_len, '\0');
+        if (!data_in.read(&title[0], title_len)) return std::nullopt;
+
+        return DocInfo{url, title};
+    }
+    
+    uint32_t size() const { return total_docs; }
 };
 
 class InvertedIndex; // forward
@@ -210,20 +226,23 @@ public:
         : index(this)
     {
         std::ifstream index_file(base_path + "/inverted_index.index", std::ios::binary);
-        while (index_file.peek() != EOF) {
+        while (true) {
             uint32_t term_len;
-            index_file.read(reinterpret_cast<char*>(&term_len), sizeof(term_len));
+            if (!index_file.read(reinterpret_cast<char*>(&term_len), sizeof(term_len))) break;
+
             std::string term(term_len, '\0');
-            index_file.read(&term[0], term_len);
+            if (!index_file.read(&term[0], term_len)) break;
+
             uint64_t offset;
-            index_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+            if (!index_file.read(reinterpret_cast<char*>(&offset), sizeof(offset))) break;
+
             term_to_offset[term] = offset;
         }
 
         postings_file.open(base_path + "/inverted_index.postinglists", std::ios::binary);
         if (!postings_file.is_open()) throw std::runtime_error("Cannot open postinglists");
 
-        doc_store.load(base_path + "/inverted_index.docstore");
+        doc_store.open(base_path + "/inverted_index");
     }
 
     friend class IndexAccessor;

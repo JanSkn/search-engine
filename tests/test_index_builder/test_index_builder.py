@@ -1,6 +1,7 @@
 import pytest
 
 import pytest
+from cpp_utils import DocInfo  # type: ignore [import-untyped]
 from backend.search_engine.index.index_loader import get_index
 
 EXPECTED = {
@@ -74,3 +75,24 @@ def test_real_index_postings(term):
     assert result.postings == sorted(result.postings)
     for doc_id, pos in result.positions.items():
         assert len(pos) == result.term_frequencies[doc_id]
+
+def test_real_index_docstore():
+    inverted_index = get_index()
+    doc_store = inverted_index.doc_store
+
+    expected_docs = {
+        0: DocInfo("http://example.com/0", "Title One"),
+        1: DocInfo("http://example.com/1", "Title Two"),
+        2: DocInfo("http://example.com/2", "Title Three"),
+        3: DocInfo("http://example.com/3", "Title Four"),
+        4: DocInfo("http://example.com/4", "Title Five"),
+        5: DocInfo("http://example.com/5", "Title Six"),
+        6: DocInfo("http://example.com/6", "Title Seven"),
+        7: DocInfo("http://example.com/7", "Title Eight"),
+        8: DocInfo("http://example.com/8", "Title Nine"),
+        9: DocInfo("http://example.com/9", "Title Ten"),
+    }
+
+    for doc_id, doc_info in expected_docs.items():
+        assert doc_store.get(doc_id).url == doc_info.url
+        assert doc_store.get(doc_id).title == doc_info.title

@@ -54,8 +54,8 @@ Thumbs.db
 node_modules/
 dist/
 
-*.tsv
-*.gz
+**/*.tsv
+**/*.gz
 # allow test data files as they are small and necessary for tests
 !src/backend/search_engine/index_builder/test_data/*.tsv
 !src/backend/search_engine/index_builder/test_data/*.gz
