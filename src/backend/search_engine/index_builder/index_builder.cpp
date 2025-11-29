@@ -129,37 +129,36 @@ struct PostingList {
     std::unordered_map<uint32_t, uint32_t> skip_pointers;
     
     size_t add_document_occurrences(uint32_t doc_id, const std::vector<uint32_t>& new_positions) {
-    size_t memory_delta = 0;
+        size_t memory_delta = 0;
 
-    if (!postings.empty() && postings.back() == doc_id) {
-        // existing last doc: extend its positions vector
-        term_frequencies.back() += new_positions.size();
-        auto& pos_vec = positions.back();
+        if (!postings.empty() && postings.back() == doc_id) {
+            // existing last doc: extend its positions vector
+            term_frequencies.back() += new_positions.size();
+            auto& pos_vec = positions.back();
 
-        size_t old_cap = pos_vec.capacity();
-        pos_vec.insert(pos_vec.end(), new_positions.begin(), new_positions.end());
-        size_t new_cap = pos_vec.capacity();
+            size_t old_cap = pos_vec.capacity();
+            pos_vec.insert(pos_vec.end(), new_positions.begin(), new_positions.end());
+            size_t new_cap = pos_vec.capacity();
 
-        memory_delta += (new_cap - old_cap) * sizeof(uint32_t);
-    } else {
-        // new doc entry
-        postings.push_back(doc_id);
-        term_frequencies.push_back(new_positions.size());
+            memory_delta += (new_cap - old_cap) * sizeof(uint32_t);
+        } else {
+            // new doc entry
+            postings.push_back(doc_id);
+            term_frequencies.push_back(new_positions.size());
 
-        positions.emplace_back();
-        auto& pos_vec = positions.back();
-        pos_vec.reserve(new_positions.size());
-        pos_vec.insert(pos_vec.end(), new_positions.begin(), new_positions.end());
+            positions.emplace_back();
+            auto& pos_vec = positions.back();
+            pos_vec.reserve(new_positions.size());
+            pos_vec.insert(pos_vec.end(), new_positions.begin(), new_positions.end());
 
-        memory_delta += sizeof(uint32_t) * 2; // doc_id + tf (stored elsewhere)
-        memory_delta += VECTOR_OVERHEAD; // vector structure overhead
-        memory_delta += pos_vec.capacity() * sizeof(uint32_t);
+            memory_delta += sizeof(uint32_t) * 2; // doc_id + tf (stored elsewhere)
+            memory_delta += VECTOR_OVERHEAD; // vector structure overhead
+            memory_delta += pos_vec.capacity() * sizeof(uint32_t);
+        }
+
+        return memory_delta;
     }
 
-    return memory_delta;
-}
-
-    
     void build_skip_pointers() {
         if (postings.empty()) return;
         size_t skip_interval = static_cast<size_t>(std::sqrt(postings.size()));
@@ -374,7 +373,8 @@ struct MergeState {
 
 class InvertedIndexBuilder {
 private:
-    std::unordered_map<std::string, PostingList> partial_index;
+    std::unordered_map<std::string, uint32_t> term_to_index;
+    std::vector<PostingList> posting_lists;
     size_t current_memory;
     size_t memory_limit;
     std::vector<std::string> spilled_files;
@@ -397,25 +397,29 @@ public:
     
     void add_document(uint32_t doc_id, const std::vector<std::string>& tokens,
                       const std::string& url = "", const std::string& title = "") {
-        
         std::unordered_map<std::string, std::vector<uint32_t>> term_positions;
         for (uint32_t pos = 0; pos < tokens.size(); pos++) {
             term_positions[tokens[pos]].push_back(pos);
         }
         
         for (const auto& [term, positions] : term_positions) {
+            uint32_t pl_index;
             bool is_new_term = false;
             
-            if (partial_index.find(term) == partial_index.end()) {
+            auto it = term_to_index.find(term);
+            if (it == term_to_index.end()) {
                 is_new_term = true;
+                pl_index = posting_lists.size();
+                term_to_index[term] = pl_index;
+                posting_lists.emplace_back();
+            } else {
+                pl_index = it->second;
             }
             
-            auto& pl = partial_index[term]; // existing or new PostingList
-            
+            auto& pl = posting_lists[pl_index];
             size_t bytes_added = pl.add_document_occurrences(doc_id, positions);
             
             if (is_new_term) {
-                // add overhead for the key in partial_index map (node + string size)
                 bytes_added += MAP_NODE_OVERHEAD + term.size() + sizeof(PostingList);
             }
             
@@ -425,7 +429,7 @@ public:
         if (current_memory > memory_limit) {
             spill_to_disk();
         }
-
+        
         doc_store.add_document(doc_id, url, title);
     }
     
@@ -472,40 +476,41 @@ public:
         std::string filename = temp_dir + "/spill_" + std::to_string(spill_counter++) + ".bin";
         std::ofstream out(filename, std::ios::binary);
         
-        std::vector<std::pair<const std::string*, PostingList*>> sorted_terms_ptrs;
-        sorted_terms_ptrs.reserve(partial_index.size());
-
-        for (auto& it : partial_index) {
-            sorted_terms_ptrs.emplace_back(&it.first, &it.second);
+        std::vector<std::pair<std::string, uint32_t>> sorted_terms;
+        sorted_terms.reserve(term_to_index.size());
+        
+        for (const auto& [term, idx] : term_to_index) {
+            sorted_terms.emplace_back(term, idx);
         }
-
-        std::sort(sorted_terms_ptrs.begin(), sorted_terms_ptrs.end(),
-                [](auto& a, auto& b){ return *a.first < *b.first; });
-
-
-        uint32_t term_count = sorted_terms_ptrs.size();
+        
+        std::sort(sorted_terms.begin(), sorted_terms.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+        
+        uint32_t term_count = sorted_terms.size();
         out.write(reinterpret_cast<const char*>(&term_count), sizeof(term_count));
         
-        for (auto& [term_ptr, pl_ptr] : sorted_terms_ptrs) {            
-            uint32_t term_len = term_ptr->size();
+        for (const auto& [term, idx] : sorted_terms) {
+            uint32_t term_len = term.size();
             out.write(reinterpret_cast<const char*>(&term_len), sizeof(term_len));
-            out.write(term_ptr->data(), term_len);
-
-            write_posting_list(out, *pl_ptr);
+            out.write(term.data(), term_len);
+            
+            const PostingList& pl = posting_lists[idx];
+            write_posting_list(out, pl);
         }
         
         out.close();
         spilled_files.push_back(filename);
         
-        std::cout << "Spilled " << partial_index.size() << " terms to " << filename 
+        std::cout << "Spilled " << term_to_index.size() << " terms to " << filename 
                 << " (" << current_memory / (1024*1024) << " MB)" << std::endl;
         
-        partial_index.clear();
+        term_to_index.clear();
+        posting_lists.clear();
         current_memory = 0;
     }
     
     void finalize(const std::string& output_file_base) {
-        if (!partial_index.empty()) {
+        if (!term_to_index.empty()) {
             spill_to_disk();
         }
 
@@ -713,6 +718,7 @@ int main(int argc, char* argv[]) {
     auto start_read = std::chrono::high_resolution_clock::now();
     auto start_chunk = start_read;
 
+    uint32_t max_docs = -1; // set to a positive number for testing with limited docs
     while (true) {
         int bytes_read = gzread(in, decompressed_data.data(), CHUNK_SIZE);
         if (bytes_read <= 0) break;
@@ -740,13 +746,15 @@ int main(int argc, char* argv[]) {
                         << "Speed: " << (int)docs_per_sec << " docs/s" << std::endl;
                 start_chunk = now;
             }
+            if (max_docs != -1 && doc_count >= max_docs) break;
         }
 
         line_buffer = line_buffer.substr(start);
+        if (max_docs != -1 && doc_count >= max_docs) break;
     }
 
     // process last line if no \n at end
-    if (!line_buffer.empty()) {
+    if (doc_count < max_docs && !line_buffer.empty()) {
         ParsedDoc doc = parse_line(line_buffer);
         std::vector<std::string> tokens = tokenize(doc.body);
         builder.add_document(doc.doc_id, tokens, doc.url, doc.title);
