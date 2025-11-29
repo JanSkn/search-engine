@@ -102,7 +102,7 @@ def main():
     if args.n:
         print(f"Processing first {args.n:,} lines", file=sys.stderr)
     else:
-        print(f"Processing all lines", file=sys.stderr)
+        print("Processing all lines", file=sys.stderr)
 
     with open_stream(args.tsv) as in_stream:
         count = convert_to_gzip(
