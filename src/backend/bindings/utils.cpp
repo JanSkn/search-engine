@@ -34,52 +34,46 @@ const std::unordered_set<std::string> KEEP_TOKENS = {"AND", "&", "OR", "|", "NOT
 
 std::vector<std::string> normalize_search_query(const std::string& text) {
     std::vector<std::string> tokens;
-    std::string token;
-    std::string token_original; // Keep original case for KEEP_TOKENS check
+    std::string token;          // lowercase version for stemming
+    std::string token_original; // exact original casing
 
-    for (char c : text) {
-        if (std::isspace(c)) {
-            if (!token.empty()) {
-                if (KEEP_TOKENS.find(token_original) != KEEP_TOKENS.end()) {
-                    tokens.push_back(token_original);
-                } else {
-                    tokens.push_back(stemmer.stem(token));
-                }
-                token.clear();
-                token_original.clear();
-            }
-            continue;
-        }
+    auto flush_token = [&]() {
+        if (token.empty()) return;
 
-        if (std::isalnum(c)) {
-            token += std::tolower(c);
-            token_original += std::toupper(c);
-        } else {
-            // Handle current token if exists
-            if (!token.empty()) {
-                if (KEEP_TOKENS.find(token_original) != KEEP_TOKENS.end()) {
-                    tokens.push_back(token_original);
-                } else {
-                    tokens.push_back(stemmer.stem(token));
-                }
-                token.clear();
-                token_original.clear();
-            }
-
-            std::string special(1, c);
-            if (KEEP_TOKENS.find(special) != KEEP_TOKENS.end()) {
-                tokens.push_back(special);
-            }
-        }
-    }
-
-    if (!token.empty()) {
         if (KEEP_TOKENS.find(token_original) != KEEP_TOKENS.end()) {
-            tokens.push_back(token_original);
+            tokens.push_back(token_original);          // keep original casing for operators/parentheses
         } else {
             tokens.push_back(stemmer.stem(token));
         }
+
+        token.clear();
+        token_original.clear();
+    };
+
+    for (char c : text) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            token += std::tolower(static_cast<unsigned char>(c));
+            token_original += c;                       // keep original case
+            continue;
+        }
+
+        // whitespace ends token
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            flush_token();
+            continue;
+        }
+
+        // special character ends token
+        flush_token();
+
+        std::string special(1, c);
+        if (KEEP_TOKENS.find(special) != KEEP_TOKENS.end()) {
+            tokens.push_back(special);                 // operator/punctuation
+        }
     }
+
+    // flush trailing token
+    flush_token();
 
     return tokens;
 }
