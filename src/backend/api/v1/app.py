@@ -1,6 +1,5 @@
 from typing import Annotated
 import os
-import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,11 +16,8 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.debug("Loading search index...")
-    start = time.time()
+    logger.debug("Starting up...")
     app.state.inverted_index = get_index()
-    end = time.time()
-    logger.debug(f"Search index loaded in {end - start}s")
     yield
     logger.debug("Shutting down...")
 
@@ -41,7 +37,7 @@ app.add_middleware(
 async def search(
     q: Annotated[str, Query(min_length=1, max_length=50, description="Search query")],
     limit: Annotated[
-        int, Query(ge=1, le=100, description="Maximum number of results")
+        int, Query(ge=1, le=500, description="Maximum number of results")
     ] = 10,
 ) -> list[SearchResult]:
     if app.state.inverted_index is None:

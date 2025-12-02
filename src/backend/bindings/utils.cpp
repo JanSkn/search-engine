@@ -249,30 +249,228 @@ std::optional<PostingList> IndexAccessor::get(const std::string& term) {
     return pl;
 }
 
-std::vector<uint32_t> list_union(
-    const std::vector<uint32_t>& postings_1,
-    const std::vector<uint32_t>& postings_2)
-{
-    std::vector<uint32_t> result;
-    std::set_union(
-        postings_1.begin(), postings_1.end(),
-        postings_2.begin(), postings_2.end(),
-        std::back_inserter(result)
-    );
+PostingList positional_intersect(
+    const PostingList& pl1,
+    const PostingList& pl2,
+    uint32_t distance
+) {
+    PostingList result;
+
+    const auto& p1 = pl1.postings;
+    const auto& p2 = pl2.postings;
+    const auto& pos1 = pl1.positions;
+    const auto& pos2 = pl2.positions;
+    const auto& skip1 = pl1.skip_pointers;
+    const auto& skip2 = pl2.skip_pointers;
+
+    size_t i = 0, j = 0;
+    const size_t n1 = p1.size();
+    const size_t n2 = p2.size();
+
+    result.postings.reserve(std::min(n1, n2)); // conservative
+
+    while (i < n1 && j < n2) {
+        uint32_t doc1 = p1[i];
+        uint32_t doc2 = p2[j];
+
+        if (doc1 == doc2) {
+            uint32_t doc_id = doc1;
+
+            // Check if positional data exists
+            auto it1 = pos1.find(doc_id);
+            auto it2 = pos2.find(doc_id);
+
+            if (it1 != pos1.end() && it2 != pos2.end()) {
+                const auto& positions1 = it1->second;
+                const auto& positions2 = it2->second;
+
+                // Positional match via two-pointer
+                size_t a = 0, b = 0;
+                std::vector<uint32_t> valid_positions;
+                valid_positions.reserve(positions1.size());
+
+                while (a < positions1.size() && b < positions2.size()) {
+                    uint32_t pA = positions1[a];
+                    uint32_t pB = positions2[b];
+
+                    if (pB == pA + distance) {
+                        valid_positions.push_back(pA);
+                        ++a;
+                        ++b;
+                    } else if (pB < pA + distance) {
+                        ++b;
+                    } else {
+                        ++a;
+                    }
+                }
+
+                if (!valid_positions.empty()) {
+                    result.postings.push_back(doc_id);
+                    result.term_frequencies[doc_id] = valid_positions.size();
+                    result.positions[doc_id] = std::move(valid_positions);
+                }
+            }
+
+            ++i;
+            ++j;
+        }
+
+        else if (doc1 < doc2) {
+            // skip pointer support for pl1
+            auto it_s1 = skip1.find(i);
+            if (it_s1 != skip1.end() && it_s1->second < n1 && p1[it_s1->second] <= doc2) {
+                i = it_s1->second;
+            } else {
+                ++i;
+            }
+        }
+
+        else { // doc2 < doc1
+            // skip pointer support for pl2
+            auto it_s2 = skip2.find(j);
+            if (it_s2 != skip2.end() && it_s2->second < n2 && p2[it_s2->second] <= doc1) {
+                j = it_s2->second;
+            } else {
+                ++j;
+            }
+        }
+    }
+
+    // Skip pointers for result
+    result.build_skip_pointers();
     return result;
 }
 
-std::vector<uint32_t> list_diff(
-    const std::vector<uint32_t>& postings_1,
-    const std::vector<uint32_t>& postings_2)
-{
-    std::vector<uint32_t> result;
-    std::set_difference(
-        postings_1.begin(), postings_1.end(),
-        postings_2.begin(), postings_2.end(),
-        std::back_inserter(result)
-    );
-    return result;
+// faster if left posting list is smaller
+PostingList find_docs(
+    const PostingList& pl1,
+    const PostingList& pl2,
+    const std::string& mode
+) {
+    const auto& p1 = pl1.postings;
+    const auto& p2 = pl2.postings;
+
+    const auto& skip1 = pl1.skip_pointers;
+    const auto& skip2 = pl2.skip_pointers;
+
+    const auto& tf1 = pl1.term_frequencies;
+    const auto& tf2 = pl2.term_frequencies;
+
+    size_t i = 0, j = 0;
+    const size_t n1 = p1.size();
+    const size_t n2 = p2.size();
+
+    std::vector<uint32_t> result_postings;
+    result_postings.reserve(std::min(n1, n2)); // most likely
+
+    std::unordered_map<uint32_t, uint32_t> result_tf;
+
+    if (mode == "AND") {
+
+        while (i < n1 && j < n2) {
+            uint32_t d1 = p1[i];
+            uint32_t d2 = p2[j];
+
+            if (d1 == d2) {
+                result_postings.push_back(d1);
+                result_tf[d1] = tf1.at(d1) + tf2.at(d2);
+
+                i++;
+                j++;
+            }
+            else if (d1 < d2) {
+                auto it = skip1.find(i);
+                if (it != skip1.end() && p1[it->second] <= d2) {
+                    i = it->second;
+                } else {
+                    i++;
+                }
+            }
+            else { // d2 < d1
+                auto it = skip2.find(j);
+                if (it != skip2.end() && p2[it->second] <= d1) {
+                    j = it->second;
+                } else {
+                    j++;
+                }
+            }
+        }
+
+        PostingList out(result_postings, result_tf, {});
+        out.build_skip_pointers();
+        return out;
+    }
+
+    if (mode == "OR") {
+        std::vector<uint32_t> merged;
+        merged.reserve(n1 + n2);
+
+        size_t a = 0, b = 0;
+
+        while (a < n1 && b < n2) {
+            uint32_t x = p1[a];
+            uint32_t y = p2[b];
+
+            if (x == y) {
+                merged.push_back(x);
+                result_tf[x] = tf1.at(x) + tf2.at(y);
+                a++; b++;
+            }
+            else if (x < y) {
+                merged.push_back(x);
+                result_tf[x] = tf1.at(x);
+                a++;
+            }
+            else {
+                merged.push_back(y);
+                result_tf[y] = tf2.at(y);
+                b++;
+            }
+        }
+
+        // Append remaining
+        while (a < n1) {
+            uint32_t x = p1[a++];
+            merged.push_back(x);
+            result_tf[x] = tf1.at(x);
+        }
+
+        while (b < n2) {
+            uint32_t y = p2[b++];
+            merged.push_back(y);
+            result_tf[y] = tf2.at(y);
+        }
+
+        PostingList out(merged, result_tf, {});
+        out.build_skip_pointers();
+        return out;
+    }
+
+    if (mode == "NOT") {
+        // result = pl1 - pl2
+        std::vector<uint32_t> diff;
+        diff.reserve(n1);
+
+        size_t a = 0, b = 0;
+
+        while (a < n1) {
+            uint32_t x = p1[a];
+
+            while (b < n2 && p2[b] < x) b++;
+
+            if (b == n2 || p2[b] != x) {
+                diff.push_back(x);
+                result_tf[x] = tf1.at(x);
+            }
+            a++;
+        }
+
+        PostingList out(diff, result_tf, {});
+        out.build_skip_pointers();
+        return out;
+    }
+
+    return PostingList({}, {}, {});
 }
 
 PYBIND11_MODULE(_core, m) {
@@ -282,13 +480,18 @@ PYBIND11_MODULE(_core, m) {
         py::arg("text"),
         "Normalize and stem search query into tokens, but keep logical operators and parentheses as is");
 
-    m.def("list_union", &list_union,
-        py::arg("postings_1"), py::arg("postings_2"),
-        "Union of two sorted posting lists");
+    m.def("positional_intersect", &positional_intersect,
+        py::arg("pl1"), py::arg("pl2"), py::arg("distance") = 1,
+        "Positional intersection of two posting lists with given distance");
 
-    m.def("list_diff", &list_diff,
-        py::arg("postings_1"), py::arg("postings_2"),
-        "Difference of two sorted posting lists (postings_1 - postings_2)");
+    m.def(
+        "find_docs",
+        &find_docs,
+        py::arg("pl1"),
+        py::arg("pl2"),
+        py::arg("mode"),
+        "Find documents that are in both posting lists"
+    );
 
     py::class_<DocInfo>(m, "DocInfo")
         .def(py::init<>())
