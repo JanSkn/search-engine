@@ -1,6 +1,5 @@
 import pytest
 
-import pytest
 from cpp_utils import DocInfo  # type: ignore [import-untyped]
 from backend.search_engine.index.index_loader import get_index
 
@@ -8,7 +7,11 @@ EXPECTED = {
     "alpha": {
         "postings": [0, 1, 4, 7, 9],
         "tf": {
-            0: 2, 1: 3, 4: 1, 7: 1, 9: 1,
+            0: 2,
+            1: 3,
+            4: 1,
+            7: 1,
+            9: 1,
         },
         "pos": {
             0: [0, 2],
@@ -18,11 +21,15 @@ EXPECTED = {
             9: [0],
         },
     },
-
     "beta": {
         "postings": [0, 2, 4, 5, 8, 9],
         "tf": {
-            0: 2, 2: 2, 4: 1, 5: 1, 8: 1, 9: 1,
+            0: 2,
+            2: 2,
+            4: 1,
+            5: 1,
+            8: 1,
+            9: 1,
         },
         "pos": {
             0: [1, 3],
@@ -33,11 +40,14 @@ EXPECTED = {
             9: [1],
         },
     },
-
     "gamma": {
         "postings": [2, 3, 6, 8, 9],
         "tf": {
-            2: 2, 3: 3, 6: 1, 8: 1, 9: 1,
+            2: 2,
+            3: 3,
+            6: 1,
+            8: 1,
+            9: 1,
         },
         "pos": {
             2: [2, 3],
@@ -47,11 +57,14 @@ EXPECTED = {
             9: [2],
         },
     },
-
     "delta": {
         "postings": [3, 4, 6, 7, 9],
         "tf": {
-            3: 1, 4: 1, 6: 1, 7: 2, 9: 1,
+            3: 1,
+            4: 1,
+            6: 1,
+            7: 2,
+            9: 1,
         },
         "pos": {
             3: [3],
@@ -62,6 +75,7 @@ EXPECTED = {
         },
     },
 }
+
 
 @pytest.mark.parametrize("term", ["alpha", "beta", "gamma", "delta"])
 def test_real_index_postings(term):
@@ -75,6 +89,7 @@ def test_real_index_postings(term):
     assert result.postings == sorted(result.postings)
     for doc_id, pos in result.positions.items():
         assert len(pos) == result.term_frequencies[doc_id]
+
 
 def test_real_index_docstore():
     inverted_index = get_index()

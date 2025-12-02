@@ -6,8 +6,8 @@ from ._core import (
     InvertedIndex,
     PostingList,
     normalize_search_query,
-    list_union,
-    list_diff,
+    positional_intersect,
+    find_docs,
 )
 
 __all__: list[str] = [
@@ -16,6 +16,6 @@ __all__: list[str] = [
     "DocStore",
     "DocInfo",
     "normalize_search_query",
-    "list_union",
-    "list_diff",
+    "positional_intersect",
+    "find_docs",
 ]

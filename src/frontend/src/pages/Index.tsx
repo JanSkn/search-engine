@@ -22,10 +22,12 @@ const Index = () => {
   const [currentQuery, setCurrentQuery] = useState("");
   const { toast } = useToast();
   const [currentText, setCurrentText] = useState("");
-  const [limit, setLimit] = useState(10);
-  const [showSettings, setShowSettings] = useState(false);
 
-  const RESULTS_PER_PAGE = 10;
+  // Search settings
+  const [limit, setLimit] = useState(100); // Max total results
+  const [tempLimit, setTempLimit] = useState(limit);
+  const [resultsPerPage, setResultsPerPage] = useState(10); // Results per page
+  const [showSettings, setShowSettings] = useState(false);
 
   const searchTexts = [
     "recipes...",
@@ -36,15 +38,17 @@ const Index = () => {
     "product reviews...",
   ];
 
-  // Read page from URL on mount
+  // Load page, query, limit, and results per page from URL on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const page = parseInt(params.get("page") || "1");
     const query = params.get("q") || "";
-    const urlLimit = parseInt(params.get("limit") || "10");
-    
+    const urlLimit = parseInt(params.get("limit") || "100");
+    const urlRPP = parseInt(params.get("rpp") || "10");
+
     if (page > 1) setCurrentPage(page);
     if (urlLimit) setLimit(urlLimit);
+    if (urlRPP) setResultsPerPage(urlRPP);
     if (query) {
       setCurrentQuery(query);
       setHasSearched(true);
@@ -52,25 +56,22 @@ const Index = () => {
     }
   }, []);
 
-  // Update URL when page or limit changes
+  // Update URL whenever page, limit, or results per page changes
   useEffect(() => {
     if (hasSearched && currentQuery) {
       const params = new URLSearchParams();
       params.set("q", currentQuery);
-      if (currentPage > 1) {
-        params.set("page", currentPage.toString());
-      }
-      if (limit !== 10) {
-        params.set("limit", limit.toString());
-      }
+      if (currentPage > 1) params.set("page", currentPage.toString());
+      if (limit !== 10) params.set("limit", limit.toString());
+      if (resultsPerPage !== 10) params.set("rpp", resultsPerPage.toString());
       window.history.pushState({}, "", `?${params.toString()}`);
-      
+
       // Scroll to top when page changes
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
-  }, [currentPage, limit, hasSearched, currentQuery]);
+  }, [currentPage, limit, resultsPerPage, hasSearched, currentQuery]);
 
-  // Typing animation effect
+  // Typing animation effect on landing page
   useEffect(() => {
     if (hasSearched) return;
 
@@ -110,6 +111,7 @@ const Index = () => {
     };
   }, [hasSearched]);
 
+  // Handle search request
   const handleSearch = async (query: string, customLimit = limit) => {
     setIsLoading(true);
     setError(null);
@@ -118,33 +120,27 @@ const Index = () => {
     setCurrentPage(1);
     setAllResults([]);
     setLimit(customLimit);
-  
+
     window.scrollTo({ top: 0, behavior: "smooth" });
-  
+
     try {
       const response = await fetch(
         `http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
       );
-  
+
       if (!response.ok) {
         let errorMsg = `Search failed: ${response.status} ${response.statusText}`;
-
         try {
           const data = await response.json();
-          if (data.detail) {
-            errorMsg = data.detail;       
-          } 
-        } catch {
-          /* fallback → do nothing */
-        }
-
+          if (data.detail) errorMsg = data.detail;
+        } catch {}
         throw new Error(errorMsg);
       }
-  
+
       const data = await response.json();
       const searchResults = Array.isArray(data) ? data : data.results || [];
       setAllResults(searchResults);
-  
+
       if (searchResults.length === 0) {
         toast({
           title: "No results found",
@@ -154,12 +150,9 @@ const Index = () => {
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "An unknown error occurred while searching";
-
       console.error("Search error:", errorMessage);
-
       setError(errorMessage);
-      setAllResults([]);   // Nur leeren — keine Demo
-
+      setAllResults([]);
       toast({
         title: "Search failed",
         description: errorMessage,
@@ -170,6 +163,7 @@ const Index = () => {
     }
   };
 
+  // Update max total results
   const handleLimitChange = (newLimit: number) => {
     setLimit(newLimit);
     if (hasSearched && currentQuery) {
@@ -178,26 +172,31 @@ const Index = () => {
     setShowSettings(false);
   };
 
+  // Update results per page
+  const handleResultsPerPageChange = (newRPP: number) => {
+    setResultsPerPage(newRPP);
+    setCurrentPage(1); // reset to first page
+    setShowSettings(false);
+  };
+
+  // Pagination logic
+  const startIndex = (currentPage - 1) * resultsPerPage;
+  const endIndex = startIndex + resultsPerPage;
+  const paginatedResults = allResults.slice(startIndex, endIndex);
+  const totalPages = Math.ceil(allResults.length / resultsPerPage);
+
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setCurrentPage(newPage);
   };
 
-  // Paginate results
-  const startIndex = (currentPage - 1) * RESULTS_PER_PAGE;
-  const endIndex = startIndex + RESULTS_PER_PAGE;
-  const paginatedResults = allResults.slice(startIndex, endIndex);
-  const totalPages = Math.ceil(allResults.length / RESULTS_PER_PAGE);
-
-  // Generate page numbers to display
+  // Generate visible page numbers
   const getPageNumbers = () => {
     const pages: (number | string)[] = [];
     const maxVisible = 7;
 
     if (totalPages <= maxVisible) {
-      for (let i = 1; i <= totalPages; i++) {
-        pages.push(i);
-      }
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
     } else {
       if (currentPage <= 4) {
         for (let i = 1; i <= 5; i++) pages.push(i);
@@ -236,34 +235,53 @@ const Index = () => {
           {showSettings && (
             <>
               {/* Backdrop */}
-              <div 
-                className="fixed inset-0 z-40" 
+              <div
+                className="fixed inset-0 z-40"
                 onClick={() => setShowSettings(false)}
               />
-              
+
               {/* Settings Panel */}
               <div className="absolute right-0 mt-2 w-64 bg-background border border-input rounded-lg shadow-lg p-4 z-50">
                 <h3 className="font-semibold text-sm mb-3">Search Settings</h3>
-                
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">
-                    Max. total results
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[10, 25, 50, 100].map((l) => (
-                      <button
-                        key={l}
-                        onClick={() => handleLimitChange(l)}
-                        disabled={isLoading}
-                        className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                          limit === l
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "border-input hover:bg-accent"
-                        } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        {l}
-                      </button>
-                    ))}
+
+                <div className="space-y-4">
+                  {/* Max total results */}
+                  <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground">Max. total results</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={tempLimit}
+                      onChange={(e) => setTempLimit(parseInt(e.target.value) || 1)}
+                      onBlur={() => handleLimitChange(tempLimit)}          // triggers search when leaving field
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleLimitChange(tempLimit); // triggers search on Enter
+                      }}
+                      disabled={isLoading}
+                      className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring focus:border-primary"
+                    />
+                  </div>
+
+                  {/* Results per page */}
+                  <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground">Results per page</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[5, 10, 20, 50].map((rpp) => (
+                        <button
+                          key={rpp}
+                          onClick={() => handleResultsPerPageChange(rpp)}
+                          disabled={isLoading}
+                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                            resultsPerPage === rpp
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "border-input hover:bg-accent"
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        >
+                          {rpp}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -272,18 +290,14 @@ const Index = () => {
         </div>
       )}
 
-      {/* Centered Landing View */}
+      {/* Landing Page */}
       {!hasSearched && (
         <div className="flex items-center justify-center min-h-screen px-4">
           <div className="w-full max-w-2xl">
-            {/* Logo/Brand */}
+            {/* Logo */}
             <div className="text-center mb-8">
               <div className="flex items-center justify-center gap-3 mb-2">
-                <img
-                  src={seekrLogo}
-                  alt="Seekr logo"
-                  className="h-20 w-20"
-                />
+                <img src={seekrLogo} alt="Seekr logo" className="h-20 w-20" />
                 <h1 className="text-7xl font-bold text-primary tracking-tight">
                   Seekr
                 </h1>
@@ -297,39 +311,25 @@ const Index = () => {
             </div>
 
             {/* Search Input */}
-            <SearchInput 
-              onSearch={handleSearch} 
-              isLoading={isLoading}
-              initialValue={currentQuery}
-            />
+            <SearchInput onSearch={handleSearch} isLoading={isLoading} initialValue={currentQuery} />
           </div>
         </div>
       )}
 
-      {/* Results View */}
+      {/* Results Page */}
       {hasSearched && (
         <div className="py-12 px-4">
           <div className="container mx-auto max-w-4xl">
-            {/* Compact Logo/Brand */}
+            {/* Compact Logo */}
             <div className="text-center mb-8">
               <div className="flex items-center justify-center gap-3 mb-2">
-                <img
-                  src={seekrLogo}
-                  alt="Seekr logo"
-                  className="h-12 w-12"
-                />
-                <h1 className="text-4xl font-bold text-primary tracking-tight">
-                  Seekr
-                </h1>
+                <img src={seekrLogo} alt="Seekr logo" className="h-12 w-12" />
+                <h1 className="text-4xl font-bold text-primary tracking-tight">Seekr</h1>
               </div>
             </div>
 
             {/* Search Input */}
-            <SearchInput 
-              onSearch={handleSearch} 
-              isLoading={isLoading}
-              initialValue={currentQuery}
-            />
+            <SearchInput onSearch={handleSearch} isLoading={isLoading} initialValue={currentQuery} />
 
             {/* Loading State */}
             {isLoading && <LoadingState />}
@@ -346,7 +346,6 @@ const Index = () => {
                 {totalPages > 1 && (
                   <div className="mt-12 mb-8">
                     <div className="flex items-center justify-center gap-2">
-                      {/* Previous Button */}
                       <button
                         onClick={() => handlePageChange(currentPage - 1)}
                         disabled={currentPage === 1}
@@ -356,7 +355,6 @@ const Index = () => {
                         <ChevronLeft className="h-5 w-5" />
                       </button>
 
-                      {/* Page Numbers */}
                       <div className="flex items-center gap-1">
                         {getPageNumbers().map((page, index) => (
                           <button
@@ -376,7 +374,6 @@ const Index = () => {
                         ))}
                       </div>
 
-                      {/* Next Button */}
                       <button
                         onClick={() => handlePageChange(currentPage + 1)}
                         disabled={currentPage === totalPages}

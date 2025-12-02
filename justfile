@@ -10,7 +10,6 @@ install-backend:
 uv-add *args:
     cd src/backend && uv add {{args}}
 
-# install frontend and backend
 install:
     just install-frontend
     just install-backend
@@ -20,7 +19,7 @@ local *uvicorn-args:
     ./local.sh {{uvicorn-args}}
 
 build-index memory-limit="1024":
-    cd src/backend/search_engine/scripts && \
+    cd src/backend/search_engine/scripts/ && \
     chmod +x build-index.sh && \
     ./build-index.sh {{memory-limit}}
 
@@ -33,11 +32,11 @@ generate-stubs:
 
 lint:
     @echo "Linting with Ruff..."
-    cd src/backend && uv run ruff check api/ search_engine/
-    cd src/backend && uv run ruff format --check --diff api/ search_engine/
+    cd src/backend && uv run ruff check api/ search_engine/ ../../tests/
+    cd src/backend && uv run ruff format --check --diff api/ search_engine/ ../../tests/
 
 format:
-    cd src/backend && uv run ruff format api/ search_engine/
+    cd src/backend && uv run ruff format api/ search_engine/ ../../tests/
 
 mypy:
     @echo "Type checking with MyPy..."

@@ -3,7 +3,7 @@ CPP utils for search engine
 """
 from __future__ import annotations
 import typing
-__all__: list[str] = ['DocInfo', 'DocStore', 'IndexAccessor', 'InvertedIndex', 'PostingList', 'list_diff', 'list_union', 'normalize_search_query']
+__all__: list[str] = ['DocInfo', 'DocStore', 'IndexAccessor', 'InvertedIndex', 'PostingList', 'normalize_search_query', 'positional_intersect', 'find_docs']
 class DocInfo:
     @typing.overload
     def __init__(self) -> None:
@@ -53,15 +53,15 @@ class PostingList:
     @property
     def term_frequencies(self) -> dict[int, int]:
         ...
-def list_diff(postings_1: list[int], postings_2: list[int]) -> list[int]:
-    """
-    Difference of two sorted posting lists (postings_1 - postings_2)
-    """
-def list_union(postings_1: list[int], postings_2: list[int]) -> list[int]:
-    """
-    Union of two sorted posting lists
-    """
 def normalize_search_query(text: str) -> list[str]:
     """
     Normalize and stem search query into tokens, but keep logical operators and parentheses as is
+    """
+def positional_intersect(pl1: PostingList, pl2: PostingList, distance: int = 1) -> PostingList:
+    """
+    Positional intersection of two posting lists with given distance
+    """
+def find_docs(pl1: PostingList, pl2: PostingList, mode: typing.Literal["AND", "OR", "NOT"]) -> PostingList:
+    """
+    Find documents that are in both posting lists
     """

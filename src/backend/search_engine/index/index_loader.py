@@ -1,6 +1,10 @@
 import os
+import time
 from functools import lru_cache
 from cpp_utils import InvertedIndex  # type: ignore [import-untyped]
+from backend.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def _index_path() -> str:
@@ -14,4 +18,8 @@ def _index_path() -> str:
 
 @lru_cache(maxsize=1)
 def get_index() -> InvertedIndex:
-    return InvertedIndex(_index_path())
+    logger.debug(f"Loading inverted index from {_index_path()}...")
+    start = time.perf_counter()
+    index = InvertedIndex(_index_path())
+    logger.debug(f"Inverted index loaded in {time.perf_counter() - start:.6f}s")
+    return index
