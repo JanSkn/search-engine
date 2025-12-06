@@ -18,10 +18,16 @@ local *uvicorn-args:
     chmod +x local.sh && \
     ./local.sh {{uvicorn-args}}
 
-build-index memory-limit="1024":
+build-index memory-limit="1024" max-docs="-1":
     cd src/backend/search_engine/scripts/ && \
     chmod +x build-index.sh && \
-    ./build-index.sh {{memory-limit}}
+    ./build-index.sh {{memory-limit}} {{max-docs}}
+
+remove-index-files:
+    rm -rf src/backend/search_engine/index/bin
+    rm -rf src/backend/search_engine/index_builder/data/docstore
+    rm -rf src/backend/search_engine/index_builder/data/index
+    rm -rf src/backend/search_engine/index_builder/data/partial_indices
 
 # from installed package
 # caution, will override existing stubs

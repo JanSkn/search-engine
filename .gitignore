@@ -237,4 +237,5 @@ dist-ssr
 !src/backend/search_engine/index_builder/test_data/*.tsv
 !src/backend/search_engine/index_builder/test_data/*.gz
 
+/src/backend/search_engine/index_builder/data/
 /src/backend/search_engine/index/bin/

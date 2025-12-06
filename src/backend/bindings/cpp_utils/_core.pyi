@@ -3,7 +3,7 @@ CPP utils for search engine
 """
 from __future__ import annotations
 import typing
-__all__: list[str] = ['DocInfo', 'DocStore', 'IndexAccessor', 'InvertedIndex', 'PostingList', 'normalize_search_query', 'positional_intersect', 'find_docs']
+__all__: list[str] = ['DocInfo', 'DocStore', 'Metadata', 'IndexAccessor', 'InvertedIndex', 'PostingList', 'normalize_search_query', 'positional_intersect', 'find_docs']
 class DocInfo:
     @typing.overload
     def __init__(self) -> None:
@@ -17,6 +17,14 @@ class DocInfo:
     @property
     def url(self) -> str:
         ...
+class Metadata:
+    @property
+    def num_docs(self) -> int: ...
+    @property
+    def avg_doc_length(self) -> float: ...
+    @property
+    def doc_lengths(self) -> dict[int, int]: ...
+    def get_doc_length(self, doc_id: int) -> int: ...
 class DocStore:
     def get(self, doc_id: int) -> DocInfo | None:
         ...

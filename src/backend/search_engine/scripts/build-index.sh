@@ -10,3 +10,5 @@ cmake ..
 cmake --build .
 
 ./index_builder "$@"
+
+./merge_partial_indices

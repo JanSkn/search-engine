@@ -11,7 +11,6 @@
 
 namespace py = pybind11;
 
-// NOTE: Snowball stemmer instance is not thread-safe
 struct SnowballStemmer {
     struct sb_stemmer* stemmer;
     SnowballStemmer() {
@@ -78,8 +77,36 @@ std::vector<std::string> normalize_search_query(const std::string& text) {
     return tokens;
 }
 
+struct Metadata {
+    uint32_t num_docs = 0;
+    double avg_doc_length = 0.0;
+    std::unordered_map<uint32_t, uint32_t> doc_lengths;
+
+    void load(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) throw std::runtime_error("Cannot open metadata file");
+
+        in.read(reinterpret_cast<char*>(&num_docs), sizeof(num_docs));
+        in.read(reinterpret_cast<char*>(&avg_doc_length), sizeof(avg_doc_length));
+
+        while (in.peek() != EOF) {
+            uint32_t doc_id, length;
+            if (!in.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id))) break;
+            if (!in.read(reinterpret_cast<char*>(&length), sizeof(length))) break;
+            doc_lengths[doc_id] = length;
+        }
+    }
+
+    uint32_t get_doc_length(uint32_t doc_id) const {
+        auto it = doc_lengths.find(doc_id);
+        if (it == doc_lengths.end()) return 0;
+        return it->second;
+    }
+};
+
 struct PostingList {
     std::vector<uint32_t> postings;
+    uint32_t doc_frequency;
     std::unordered_map<uint32_t, uint32_t> term_frequencies;
     std::unordered_map<uint32_t, std::vector<uint32_t>> positions;
     std::unordered_map<uint32_t, uint32_t> skip_pointers;
@@ -102,38 +129,27 @@ struct PostingList {
     }
 };
 
-PostingList read_posting_list(std::ifstream& in, uint64_t offset, bool with_skip_pointers = false) {
+PostingList read_posting_list(std::ifstream& in, uint64_t offset, uint32_t docFreq) {
     PostingList pl;
+    pl.doc_frequency = docFreq;
     in.seekg(offset);
     
-    uint32_t count_docs;
-    in.read(reinterpret_cast<char*>(&count_docs), sizeof(count_docs));
-    pl.postings.resize(count_docs);
+    pl.postings.resize(docFreq);
     
-    for (uint32_t i = 0; i < count_docs; i++) {
-        uint32_t doc_id, tf, pos_count;
+    for (uint32_t i = 0; i < docFreq; i++) {
+        uint32_t doc_id, pos_count;
         in.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id));
-        in.read(reinterpret_cast<char*>(&tf), sizeof(tf));
         in.read(reinterpret_cast<char*>(&pos_count), sizeof(pos_count));
         
         pl.postings[i] = doc_id;
-        pl.term_frequencies[doc_id] = tf;
+        pl.term_frequencies[doc_id] = pos_count;
         
         std::vector<uint32_t> positions(pos_count);
         in.read(reinterpret_cast<char*>(positions.data()), pos_count * sizeof(uint32_t));
         pl.positions[doc_id] = std::move(positions);
     }
     
-    if (with_skip_pointers) {
-        uint32_t skip_count;
-        in.read(reinterpret_cast<char*>(&skip_count), sizeof(skip_count));
-        for (uint32_t i = 0; i < skip_count; i++) {
-            uint32_t from_idx, to_idx;
-            in.read(reinterpret_cast<char*>(&from_idx), sizeof(from_idx));
-            in.read(reinterpret_cast<char*>(&to_idx), sizeof(to_idx));
-            pl.skip_pointers[from_idx] = to_idx;
-        }
-    }
+    pl.build_skip_pointers();
     
     return pl;
 }
@@ -150,49 +166,54 @@ struct DocInfo {
 
 class DocStore {
 private:
-    // files for disk access
-    mutable std::ifstream data_in;   
-    mutable std::ifstream offset_in;
+    std::unordered_map<uint32_t, uint64_t> offsets;
+    std::ifstream data_in;
     uint32_t total_docs;
 
 public:
-    DocStore() : total_docs(0) {}
+    void open(const std::string& dir_name) {
+        data_in.open(dir_name + "/docstore.bin", std::ios::binary);
+        std::ifstream off(dir_name + "/docstore_offsets.bin", std::ios::binary);
 
-    void open(const std::string& filename_base) {
-        data_in.open(filename_base + ".docstore", std::ios::binary);
-        offset_in.open(filename_base + ".docstore_offsets", std::ios::binary);
+        if (!data_in || !off)
+            throw std::runtime_error("Could not open docstore");
 
-        if (!data_in || !offset_in) {
-            throw std::runtime_error("Could not open docstore files: " + filename_base);
-        }
-
-        // first is number of total docs
+        // docCount at the beginning
         data_in.read(reinterpret_cast<char*>(&total_docs), sizeof(total_docs));
+
+        while (true) {
+            uint32_t id;
+            uint64_t off64;
+
+            if (!off.read(reinterpret_cast<char*>(&id), sizeof(id))) break;
+            if (!off.read(reinterpret_cast<char*>(&off64), sizeof(off64))) break;
+
+            offsets[id] = off64;
+        }
     }
 
     std::optional<DocInfo> get(uint32_t doc_id) {
-        if (doc_id >= total_docs) return std::nullopt;
+        auto it = offsets.find(doc_id);
+        if (it == offsets.end()) return std::nullopt;
 
-        // offset from offset file
-        uint64_t doc_offset;
-        offset_in.seekg(doc_id * sizeof(uint64_t));
-        if (!offset_in.read(reinterpret_cast<char*>(&doc_offset), sizeof(doc_offset))) return std::nullopt;
-
-        data_in.seekg(doc_offset);
+        uint64_t offset = it->second;
+        data_in.seekg(offset);
 
         uint32_t url_len;
-        if (!data_in.read(reinterpret_cast<char*>(&url_len), sizeof(url_len))) return std::nullopt;
+        data_in.read(reinterpret_cast<char*>(&url_len), sizeof(url_len));
+
         std::string url(url_len, '\0');
-        if (!data_in.read(&url[0], url_len)) return std::nullopt;
+        data_in.read(url.data(), url_len);
 
         uint32_t title_len;
-        if (!data_in.read(reinterpret_cast<char*>(&title_len), sizeof(title_len))) return std::nullopt;
+        data_in.read(reinterpret_cast<char*>(&title_len), sizeof(title_len));
+
         std::string title(title_len, '\0');
-        if (!data_in.read(&title[0], title_len)) return std::nullopt;
+        data_in.read(title.data(), title_len);
 
         return DocInfo{url, title};
     }
-    
+
     uint32_t size() const { return total_docs; }
 };
 
@@ -210,16 +231,18 @@ public:
 class InvertedIndex {
 private:
     std::unordered_map<std::string, uint64_t> term_to_offset;
+    std::unordered_map<std::string, uint32_t> term_to_docfreq;
     std::ifstream postings_file;
 
 public:
+    Metadata metadata;
     DocStore doc_store;
     IndexAccessor index;
 
     InvertedIndex(const std::string& base_path) 
         : index(this)
     {
-        std::ifstream index_file(base_path + "/inverted_index.index", std::ios::binary);
+        std::ifstream index_file(base_path + "/index.bin", std::ios::binary);
         while (true) {
             uint32_t term_len;
             if (!index_file.read(reinterpret_cast<char*>(&term_len), sizeof(term_len))) break;
@@ -230,13 +253,18 @@ public:
             uint64_t offset;
             if (!index_file.read(reinterpret_cast<char*>(&offset), sizeof(offset))) break;
 
+            uint32_t docFreq;
+            index_file.read(reinterpret_cast<char*>(&docFreq), sizeof(docFreq));
+            
             term_to_offset[term] = offset;
+            term_to_docfreq[term] = docFreq;
         }
 
-        postings_file.open(base_path + "/inverted_index.postinglists", std::ios::binary);
+        postings_file.open(base_path + "/postinglists.bin", std::ios::binary);
         if (!postings_file.is_open()) throw std::runtime_error("Cannot open postinglists");
 
-        doc_store.open(base_path + "/inverted_index");
+        metadata.load(base_path + "/metadata.bin");
+        doc_store.open(base_path);
     }
 
     friend class IndexAccessor;
@@ -245,7 +273,8 @@ public:
 std::optional<PostingList> IndexAccessor::get(const std::string& term) {
     auto it = parent->term_to_offset.find(term);
     if (it == parent->term_to_offset.end()) return std::nullopt;
-    PostingList pl = read_posting_list(parent->postings_file, it->second, true);
+    uint32_t docFreq = parent->term_to_docfreq.at(term);
+    PostingList pl = read_posting_list(parent->postings_file, it->second, docFreq);
     return pl;
 }
 
@@ -517,6 +546,12 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("skip_pointers", &PostingList::skip_pointers)
         .def("build_skip_pointers", &PostingList::build_skip_pointers);
 
+    py::class_<Metadata>(m, "Metadata")
+        .def_readonly("num_docs", &Metadata::num_docs)
+        .def_readonly("avg_doc_length", &Metadata::avg_doc_length)
+        .def_readonly("doc_lengths", &Metadata::doc_lengths)
+        .def("get_doc_length", &Metadata::get_doc_length, py::arg("doc_id"));
+
     py::class_<DocStore>(m, "DocStore")
         .def("get", &DocStore::get, py::arg("doc_id"));
 
@@ -526,5 +561,6 @@ PYBIND11_MODULE(_core, m) {
     py::class_<InvertedIndex>(m, "InvertedIndex")
         .def(py::init<const std::string&>())
         .def_readonly("index", &InvertedIndex::index)
+        .def_readonly("metadata", &InvertedIndex::metadata)
         .def_readonly("doc_store", &InvertedIndex::doc_store);
 }
