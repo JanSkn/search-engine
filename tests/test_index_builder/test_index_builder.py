@@ -77,6 +77,34 @@ EXPECTED = {
 }
 
 
+def test_real_index_metadata():
+    inverted_index = get_index()
+    metadata = inverted_index.metadata
+
+    expected_num_docs = 10
+    # counting title + body
+    expected_doc_lengths = {
+        0: 6,
+        1: 5,
+        2: 6,
+        3: 6,
+        4: 5,
+        5: 3,
+        6: 4,
+        7: 5,
+        8: 4,
+        9: 6,
+    }
+    expected_avg_length = sum(expected_doc_lengths.values()) / expected_num_docs
+
+    assert metadata.num_docs == expected_num_docs
+    assert metadata.avg_doc_length == expected_avg_length
+    assert metadata.doc_lengths == expected_doc_lengths
+
+    for doc_id, length in expected_doc_lengths.items():
+        assert metadata.get_doc_length(doc_id) == length
+
+
 @pytest.mark.parametrize("term", ["alpha", "beta", "gamma", "delta"])
 def test_real_index_postings(term):
     inverted_index = get_index()

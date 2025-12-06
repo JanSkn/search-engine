@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ._core import (
     DocInfo,
+    Metadata,
     DocStore,
     InvertedIndex,
     PostingList,
@@ -13,6 +14,7 @@ from ._core import (
 __all__ = [
     "InvertedIndex",
     "PostingList",
+    "Metadata",
     "DocStore",
     "DocInfo",
     "normalize_search_query",
