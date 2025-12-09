@@ -1,6 +1,9 @@
 import time
 import torch
-from .spell_corrector import SpellCorrector
+from backend.search_engine.spell_correction.spell_corrector import SpellCorrector
+from backend.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def patch_torch_load_for_neuspell() -> None:
@@ -21,11 +24,9 @@ patch_torch_load_for_neuspell()
 
 
 def repl(corrector: SpellCorrector, query: str) -> str | None:
-    print("NeuSpell SCLSTM spell correction\n")
-
-    # start = time.perf_counter()
+    start = time.perf_counter()
     corrected = corrector.correct(query)
-    # elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.debug(f"Query spell correction took {time.perf_counter() - start:.6f}")
 
     if query != corrected:
         return corrected

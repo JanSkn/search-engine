@@ -5,10 +5,11 @@ from fastapi import FastAPI, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.logging_config import setup_logging, get_logger
-from backend.search_engine.models.index import SearchResult
+from backend.search_engine.models.index import SearchResults
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.query.query_engine import QueryEngine
 from backend.search_engine.error_handling import InvalidOperatorError
+from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 
 setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = get_logger(__name__)
@@ -18,6 +19,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     logger.debug("Starting up...")
     app.state.inverted_index = get_index()
+    app.state.spell_corrector = get_spell_corrector()
     yield
     logger.debug("Shutting down...")
 
@@ -33,24 +35,24 @@ app.add_middleware(
 )
 
 
-@app.get("/search", response_model=list[SearchResult])
+@app.get("/search", response_model=SearchResults)
 async def search(
     q: Annotated[str, Query(min_length=1, max_length=50, description="Search query")],
     limit: Annotated[
         int, Query(ge=1, le=500, description="Maximum number of results")
     ] = 10,
-) -> list[SearchResult]:
-    if app.state.inverted_index is None:
+) -> SearchResults:
+    if app.state.inverted_index is None or app.state.spell_corrector is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Search index not loaded",
+            detail="Search index or spell corrector not loaded",
         )
 
     try:
         qe = QueryEngine(q)
         results = qe.search_results(limit)
 
-        return results.search_results
+        return results
     except InvalidOperatorError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

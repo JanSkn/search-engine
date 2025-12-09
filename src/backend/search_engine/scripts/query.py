@@ -2,8 +2,6 @@ import time
 import argparse
 from backend.search_engine.query.query_engine import QueryEngine
 from backend.logging_config import setup_logging
-from backend.search_engine.spell_correction.spell_corrector import SpellCorrector
-from backend.search_engine.spell_correction.spell_correction import repl
 
 setup_logging(level="DEBUG")
 

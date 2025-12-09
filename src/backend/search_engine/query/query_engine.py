@@ -17,27 +17,17 @@ from backend.search_engine.query.query_preprocessing import (
 from backend.search_engine.error_handling import InvalidOperatorError
 from backend.logging_config import get_logger
 
-from backend.search_engine.spell_correction.spell_corrector import SpellCorrector
-from backend.search_engine.spell_correction.spell_correction import repl as spell_repl
+from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
+from backend.search_engine.spell_correction.spell_correction import repl
 
 logger = get_logger(__name__)
-
-_spell_corrector: SpellCorrector | None = None
-
-
-def get_spell_corrector() -> SpellCorrector:
-    # lazy singleton, so model isnt loaded again for every query
-    global _spell_corrector
-    if _spell_corrector is None:
-        logger.debug("Loading SpellCorrector for the first time...")
-        _spell_corrector = SpellCorrector.load()
-    return _spell_corrector
 
 
 class QueryEngine:
     def __init__(self, q: str) -> None:
         self._query = q
         self.inverted_index = get_index()
+        self.corrector = get_spell_corrector()
 
     def _positional_phrase_search(self, terms: list[str]) -> PostingList:
         start = time.perf_counter()
@@ -144,8 +134,7 @@ class QueryEngine:
 
         raw_query = self._query.strip()
 
-        corrector = get_spell_corrector()
-        correction = spell_repl(corrector, raw_query)
+        correction = repl(self.corrector, raw_query)
 
         if not qt._has_operators(normalized_tokens):
             if (raw_query.startswith('"') and raw_query.endswith('"')) or (

@@ -63,3 +63,4 @@ dist/
 /src/backend/search_engine/index_builder/build/
 /src/backend/search_engine/index_builder/data/
 /src/backend/search_engine/index/bin/
+/src/backend/search_engine/models/neuspell-scrnn-probwordnoise/

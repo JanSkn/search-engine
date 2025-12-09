@@ -1,6 +1,6 @@
 import pytest
 
-from cpp_utils import DocInfo  # type: ignore [import-untyped]
+from cpp_utils import DocInfo
 from backend.search_engine.index.index_loader import get_index
 
 EXPECTED = {
