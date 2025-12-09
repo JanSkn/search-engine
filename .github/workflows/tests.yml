@@ -7,6 +7,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-      - run: just install-backend
-      - run: just test
+      - name: Install just
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y just
+        shell: bash
+      - name: Run tests
+        run: just test
