@@ -48,8 +48,9 @@ async def search(
 
     try:
         qe = QueryEngine(q)
+        results = qe.search_results(limit)
 
-        return qe.search_results(limit)
+        return results.search_results
     except InvalidOperatorError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

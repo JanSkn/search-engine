@@ -2,6 +2,7 @@ import time
 import torch
 from .spell_corrector import SpellCorrector
 
+
 def patch_torch_load_for_neuspell() -> None:
     if getattr(torch.load, "__name__", "") == "_torch_load_legacy":
         return
@@ -19,13 +20,12 @@ def patch_torch_load_for_neuspell() -> None:
 patch_torch_load_for_neuspell()
 
 
-
 def repl(corrector: SpellCorrector, query: str) -> str | None:
     print("NeuSpell SCLSTM spell correction\n")
 
-    #start = time.perf_counter()
+    # start = time.perf_counter()
     corrected = corrector.correct(query)
-    #elapsed_ms = (time.perf_counter() - start) * 1000
+    # elapsed_ms = (time.perf_counter() - start) * 1000
 
     if query != corrected:
         return corrected

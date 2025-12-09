@@ -1,6 +1,6 @@
 import time
 from backend.search_engine.index.index_loader import get_index
-from backend.search_engine.models.index import SearchResult
+from backend.search_engine.models.index import SearchResult, SearchResults
 from cpp_utils import (  # type: ignore [import-untyped]
     normalize_search_query,
     positional_intersect,
@@ -17,7 +17,21 @@ from backend.search_engine.query.query_preprocessing import (
 from backend.search_engine.error_handling import InvalidOperatorError
 from backend.logging_config import get_logger
 
+from backend.search_engine.spell_correction.spell_corrector import SpellCorrector
+from backend.search_engine.spell_correction.spell_correction import repl as spell_repl
+
 logger = get_logger(__name__)
+
+_spell_corrector: SpellCorrector | None = None
+
+
+def get_spell_corrector() -> SpellCorrector:
+    # lazy singleton, so model isnt loaded again for every query
+    global _spell_corrector
+    if _spell_corrector is None:
+        logger.debug("Loading SpellCorrector for the first time...")
+        _spell_corrector = SpellCorrector.load()
+    return _spell_corrector
 
 
 class QueryEngine:
@@ -120,7 +134,7 @@ class QueryEngine:
 
         return normalize_search_query(query_str)
 
-    def search_results(self, limit: int = 10) -> list[SearchResult]:
+    def search_results(self, limit: int = 10) -> SearchResults:
         start = time.perf_counter()
         logger.debug("Starting query execution")
 
@@ -129,6 +143,10 @@ class QueryEngine:
         logger.debug(f"Normalized search query: {normalized_tokens}")
 
         raw_query = self._query.strip()
+
+        corrector = get_spell_corrector()
+        correction = spell_repl(corrector, raw_query)
+
         if not qt._has_operators(normalized_tokens):
             if (raw_query.startswith('"') and raw_query.endswith('"')) or (
                 raw_query.startswith("'") and raw_query.endswith("'")
@@ -158,7 +176,7 @@ class QueryEngine:
                 raise
 
         if posting_lists is None or len(posting_lists.postings) == 0:
-            return []
+            return SearchResults(search_results=[], correction=correction)
 
         search_results = []
         for doc_id in posting_lists.postings[:limit]:
@@ -187,4 +205,4 @@ class QueryEngine:
             f"Returned {len(search_results)} results. "
             f"Total execution time: {end - start:.6f} seconds"
         )
-        return search_results
+        return SearchResults(search_results=search_results, correction=correction)

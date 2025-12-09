@@ -1,8 +1,12 @@
+from pathlib import Path
 from dataclasses import dataclass
 from neuspell import SclstmChecker
 
+_THIS_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = _THIS_DIR.parent
+CHECKPOINT_DIR = PROJECT_DIR / "models" / "neuspell-scrnn-probwordnoise"
+MODEL_PATH = CHECKPOINT_DIR.resolve()
 
-MODEL_PATH = "../models/neuspell-scrnn-probwordnoise"
 
 @dataclass
 class SpellCorrector:
