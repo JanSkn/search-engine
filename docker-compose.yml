@@ -1,0 +1,19 @@
+version: "3.9"
+name: "Seekr. Search Engine"
+services:
+  backend:
+    build: src/backend
+    container_name: seekr-backend
+    ports:
+      - "8000:8000" # expose backend for FE-less API access
+    volumes: # bind mount index data
+      - ./src/backend/index_builder:/app/src/backend/index_builder
+  frontend:
+    build: src/frontend
+    container_name: seekr-frontend
+    depends_on:
+      - backend
+    ports: 
+      - "8080:8080"
+    environment:
+      ENV: "DOCKER"

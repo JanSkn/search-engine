@@ -103,7 +103,7 @@ class QueryEngine:
 
         end = time.perf_counter()
         logger.debug(
-            f"Node={node.value}, Result docs={len(result.postings)}, "
+            f"Node={node.value!r}, Result docs={len(result.postings)}, "
             f"Execution time: {end - start:.6f} seconds"
         )
         return result
@@ -136,9 +136,7 @@ class QueryEngine:
                 # positional phrase search
                 logger.debug("Executing positional phrase query search...")
                 normalized_tokens_no_quots = normalize_search_query(raw_query[1:-1])
-                posting_lists = self._positional_phrase_search(
-                    normalized_tokens_no_quots
-                )
+                result = self._positional_phrase_search(normalized_tokens_no_quots)
             else:
                 # any order -> create AND query
                 logger.debug("Executing phrase query search...")
@@ -146,22 +144,33 @@ class QueryEngine:
                 logger.debug(f"Converted to AND query: {and_query}")
                 qt.parse_query(and_query)
                 logger.debug(f"Query tree: {qt.root}")
-                posting_lists = self._bool_search(qt.root)
+                result = self._bool_search(qt.root)
         else:
             logger.debug("Executing bool query search...")
             try:
                 qt.parse_query(normalized_tokens)
+                # self.inverted_index.doc_store.query_terms = qt.unique_terms
                 logger.debug(f"Query tree: {qt.root}")
-                posting_lists = self._bool_search(qt.root)
+                result = self._bool_search(qt.root)
             except InvalidOperatorError as e:
                 logger.error(f"Invalid query syntax: {e}")
                 raise
 
-        if posting_lists is None or len(posting_lists.postings) == 0:
+        if result is None or len(result.postings) == 0:
             return []
 
+        logger.debug(
+            f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
+        )
+
+        # resulting PostingList contains all matched documents
+        # tf and positions are empty (except positions for positional search) as they
+        # are term-specific and cannot be merged meaningfully here
+
+        top_n_results = result  # TODO will be done by BM25 ranking later
+
         search_results = []
-        for doc_id in posting_lists.postings[:limit]:
+        for doc_id in top_n_results.postings[:limit]:
             doc_data = self.inverted_index.doc_store.get(doc_id)
             if doc_data is None:
                 continue
@@ -170,12 +179,14 @@ class QueryEngine:
             if url is None:
                 continue
             title = doc_data.title or "Untitled"
+            snippet = doc_data.snippet
 
             try:
                 search_result = SearchResult(
                     document_id=doc_id,
                     url=url,  # type: ignore[arg-type]
                     title=title,
+                    snippet=snippet,
                 )
                 search_results.append(search_result)
             except Exception as e:

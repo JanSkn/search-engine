@@ -125,7 +125,7 @@ const Index = () => {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
+        `/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
       );
 
       if (!response.ok) {
@@ -133,7 +133,7 @@ const Index = () => {
         try {
           const data = await response.json();
           if (data.detail) errorMsg = data.detail;
-        } catch {}
+        } catch { }
         throw new Error(errorMsg);
       }
 
@@ -272,11 +272,10 @@ const Index = () => {
                           key={rpp}
                           onClick={() => handleResultsPerPageChange(rpp)}
                           disabled={isLoading}
-                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                            resultsPerPage === rpp
+                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${resultsPerPage === rpp
                               ? "bg-primary text-primary-foreground border-primary"
                               : "border-input hover:bg-accent"
-                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           {rpp}
                         </button>
@@ -361,13 +360,12 @@ const Index = () => {
                             key={index}
                             onClick={() => typeof page === "number" && handlePageChange(page)}
                             disabled={page === "..."}
-                            className={`min-w-[40px] h-10 rounded-lg font-medium transition-colors ${
-                              page === currentPage
+                            className={`min-w-[40px] h-10 rounded-lg font-medium transition-colors ${page === currentPage
                                 ? "bg-primary text-primary-foreground"
                                 : page === "..."
-                                ? "cursor-default"
-                                : "hover:bg-accent"
-                            }`}
+                                  ? "cursor-default"
+                                  : "hover:bg-accent"
+                              }`}
                           >
                             {page}
                           </button>
