@@ -33,7 +33,6 @@ std::vector<DictEntry> readDictionary(const std::string& dictFile,
         std::cerr << "Failed to open dictionary file: " << dictFile << std::endl;
         return entries;
     }
-
     // get the size of the postings file to determine the last posting's size
     std::ifstream postIn(postingsFile, std::ios::binary | std::ios::ate);
     uint64_t postingsFileSize = postIn.tellg();
@@ -47,7 +46,6 @@ std::vector<DictEntry> readDictionary(const std::string& dictFile,
         uint32_t termLen;
         dictIn.read(reinterpret_cast<char*>(&termLen), sizeof(termLen));
         if (!dictIn) break;
-
         // read term
         entry.term.resize(termLen);
         dictIn.read(&entry.term[0], termLen);
@@ -100,7 +98,6 @@ std::vector<PostingEntry> readAndParsePosting(const std::string& postingsFile, u
         uint32_t posCount;
         postIn.read(reinterpret_cast<char*>(&posCount), sizeof(posCount));
         bytesRead += sizeof(posCount);
-
         // read positions
         entry.positions.resize(posCount);
         postIn.read(reinterpret_cast<char*>(entry.positions.data()), posCount * sizeof(uint32_t));
@@ -130,7 +127,6 @@ void writePosting(std::ofstream& out, const std::vector<PostingEntry>& entries) 
 std::vector<PostingEntry> mergePostings(const std::vector<std::vector<PostingEntry>>& allPostings) {
     // use a map to merge postings by docId (automatically sorted)
     std::map<uint32_t, std::vector<uint32_t>> mergedMap;
-
     for (const auto& postings : allPostings) {
         for (const auto& entry : postings) {
             auto& positions = mergedMap[entry.docId];
@@ -151,7 +147,6 @@ std::vector<PostingEntry> mergePostings(const std::vector<std::vector<PostingEnt
         entry.positions = std::move(positions);
         result.push_back(std::move(entry));
     }
-
     return result;
 }
 
@@ -269,12 +264,10 @@ int main(int argc, char* argv[]) {
                 minHeap.push({nextEntry.term, dictIndex, entryIndex + 1});
             }
         }
-
         // check if the next entries in the heap have the same term
         while (!minHeap.empty() && minHeap.top().term == term) {
             auto same = minHeap.top();
             minHeap.pop();
-
             size_t dictIndex = same.dictIndex;
             size_t entryIndex = same.entryIndex;
             const DictEntry& entry = allDicts[dictIndex][entryIndex];
@@ -317,7 +310,6 @@ int main(int argc, char* argv[]) {
         finalDictOut.write(term.data(), termLen);
         finalDictOut.write(reinterpret_cast<const char*>(&finalOffset), sizeof(finalOffset));
         finalDictOut.write(reinterpret_cast<const char*>(&totalDocFreq), sizeof(totalDocFreq));
-
         finalOffset += postingSize;
 
         termsProcessed++;

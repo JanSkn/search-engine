@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>  // for automatic conversion of STL containers
 
+#include <iostream>
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -140,7 +141,6 @@ PostingList read_posting_list(std::ifstream& in, uint64_t offset, uint32_t doc_f
 
         pl.postings[i] = doc_id;
         pl.term_frequencies[doc_id] = pos_count;
-
         std::vector<uint32_t> positions(pos_count);
         in.read(reinterpret_cast<char*>(positions.data()), pos_count * sizeof(uint32_t));
         pl.positions[doc_id] = std::move(positions);
@@ -263,7 +263,8 @@ class InvertedIndex {
 // --- Docstore ---
 void DocStore::open(const std::string& dir_name) {
     data_in.open(dir_name + "/docstore.bin", std::ios::binary);
-    tsv_in.open(dir_name + "../../index_builder/data/msmarco-docs.tsv", std::ios::binary);
+    // TODO falscher pfad?
+    tsv_in.open(dir_name + "/../../index_builder/data/msmarco-docs.tsv", std::ios::binary);
     std::ifstream off(dir_name + "/docstore_offsets.bin", std::ios::binary);
 
     if (!data_in || !tsv_in || !off) throw std::runtime_error("Could not open docstore");
@@ -278,7 +279,7 @@ void DocStore::open(const std::string& dir_name) {
 
         if (!off.read(reinterpret_cast<char*>(&id), sizeof(id))) break;
         if (!off.read(reinterpret_cast<char*>(&off64), sizeof(off64))) break;
-        if (!off.read(reinterpret_cast<char*>(&tsvOff), sizeof(tsvOff))) break;
+        // if (!off.read(reinterpret_cast<char*>(&tsvOff), sizeof(tsvOff))) break;
 
         offsets[id] = {off64, tsvOff};
     }
@@ -526,9 +527,9 @@ std::optional<DocInfo> DocStore::get(uint32_t doc_id) {
     std::string title(title_len, '\0');
     data_in.read(title.data(), title_len);
 
-    std::string snippet = get_snippet(doc_id, tsv_offset);
+    // std::string snippet = get_snippet(doc_id, tsv_offset);
 
-    return DocInfo{url, title, snippet};
+    return DocInfo{url, title, "snippet"};
 }
 // --------------------
 

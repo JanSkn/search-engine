@@ -14,6 +14,7 @@
 
 #include "include/robin_hood.h"
 
+// not encoded as neglectably small
 class DocStoreWriter {
    private:
     std::ofstream outStream;
@@ -74,7 +75,6 @@ class DocStoreWriter {
 
         // faster than tellp()
         currentByteOffset += sizeof(uint32_t) + urlLen + sizeof(uint32_t) + titleLen;
-
         docCount++;
     }
 

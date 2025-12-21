@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch
-from cpp_utils import (  # type: ignore [import-untyped]
+from cpp_utils import (
     PostingList,
     DocInfo,
     normalize_search_query,
@@ -32,6 +32,17 @@ def mock_inverted_index():
     ) as mock_get_index_function:
         mock_get_index_function.return_value = mock_index_instance
         yield mock_index_instance
+
+
+@pytest.fixture
+def mock_spell_corrector():
+    mock_spell_corrector_instance = Mock()
+
+    with patch(
+        "backend.search_engine.query.query_engine.get_spell_corrector"
+    ) as get_spell_corrector_function:
+        get_spell_corrector_function.return_value = mock_spell_corrector_instance
+        yield mock_spell_corrector_instance
 
 
 class TestPositionalIntersect:
@@ -127,7 +138,7 @@ class TestPositionalIntersect:
 
 
 class TestPositionalPhraseSearch:
-    def test_phrase_search_basic(self, mock_inverted_index):
+    def test_phrase_search_basic(self, mock_spell_corrector, mock_inverted_index):
         postings1 = PostingList(
             postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
@@ -148,6 +159,8 @@ class TestPositionalPhraseSearch:
 
         mock_inverted_index.index.get.side_effect = get_side_effect
 
+        mock_spell_corrector.correct.return_value = "'hello world'"
+
         qe = QueryEngine("'hello world'")
         result = qe._positional_phrase_search(["hello", "world"])
 
@@ -157,7 +170,7 @@ class TestPositionalPhraseSearch:
         expected = [1, 2]
         assert result.postings == expected
 
-    def test_phrase_search_three_terms(self, mock_inverted_index):
+    def test_phrase_search_three_terms(self, mock_spell_corrector, mock_inverted_index):
         postings1 = PostingList(
             postings=[1, 2], term_frequencies={1: 1, 2: 1}, positions={1: [0], 2: [5]}
         )
@@ -179,6 +192,8 @@ class TestPositionalPhraseSearch:
 
         mock_inverted_index.index.get.side_effect = get_side_effect
 
+        mock_spell_corrector.correct.return_value = "'the quick fox'"
+
         qe = QueryEngine("'the quick fox'")
         result = qe._positional_phrase_search(["the", "quick", "fox"])
 
@@ -187,7 +202,9 @@ class TestPositionalPhraseSearch:
         expected = [1]
         assert result.postings == expected
 
-    def test_phrase_search_term_not_found(self, mock_inverted_index):
+    def test_phrase_search_term_not_found(
+        self, mock_spell_corrector, mock_inverted_index
+    ):
         postings1 = PostingList(
             postings=[1, 2], term_frequencies={1: 1, 2: 1}, positions={1: [0], 2: [5]}
         )
@@ -201,12 +218,16 @@ class TestPositionalPhraseSearch:
 
         mock_inverted_index.index.get.side_effect = get_side_effect
 
+        mock_spell_corrector.correct.return_value = "hello nonexistent"
+
         qe = QueryEngine("hello nonexistent")
         result = qe._positional_phrase_search(["hello", "nonexistent"])
 
         assert len(result.postings) == 0
 
-    def test_phrase_search_empty_query(self, mock_inverted_index):
+    def test_phrase_search_empty_query(self, mock_spell_corrector, mock_inverted_index):
+        mock_spell_corrector.correct.return_value = ""
+
         qe = QueryEngine("")
         result = qe._positional_phrase_search([])
 
@@ -214,7 +235,7 @@ class TestPositionalPhraseSearch:
         assert len(result.term_frequencies) == 0
         assert len(result.positions) == 0
 
-    def test_phrase_search_single_term(self, mock_inverted_index):
+    def test_phrase_search_single_term(self, mock_spell_corrector, mock_inverted_index):
         postings = PostingList(
             postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
@@ -223,13 +244,17 @@ class TestPositionalPhraseSearch:
 
         mock_inverted_index.index.get.return_value = postings
 
+        mock_spell_corrector.correct.return_value = "'hello'"
+
         qe = QueryEngine("'hello'")
         result = qe._positional_phrase_search(["hello"])
 
         expected = [1, 2, 3]
         assert result.postings == expected
 
-    def test_phrase_search_no_positional_match(self, mock_inverted_index):
+    def test_phrase_search_no_positional_match(
+        self, mock_spell_corrector, mock_inverted_index
+    ):
         postings1 = PostingList(
             postings=[1, 2],
             term_frequencies={1: 2, 2: 2},
@@ -249,6 +274,7 @@ class TestPositionalPhraseSearch:
             return None
 
         mock_inverted_index.index.get.side_effect = get_side_effect
+        mock_spell_corrector.correct.return_value = "word1 word2"
 
         qe = QueryEngine("word1 word2")
         result = qe._positional_phrase_search(["word1", "word2"])
@@ -466,13 +492,14 @@ class TestFindDocsNOT:
 
 
 class TestEvaluate:
-    def test_evaluate_leaf_node(self, mock_inverted_index):
+    def test_evaluate_leaf_node(self, mock_spell_corrector, mock_inverted_index):
         posting_list = PostingList(
             postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
             positions={1: [0], 2: [1], 3: [2]},
         )
         mock_inverted_index.index.get.return_value = posting_list
+        mock_spell_corrector.correct.return_value = "test"
 
         node = Node(value="test")
         result = QueryEngine("")._bool_search(node)
@@ -480,7 +507,7 @@ class TestEvaluate:
         mock_inverted_index.index.get.assert_called_once_with("test")
         assert result == posting_list
 
-    def test_evaluate_and_node(self, mock_inverted_index):
+    def test_evaluate_and_node(self, mock_spell_corrector, mock_inverted_index):
         mock_inverted_index.index.get.side_effect = [
             PostingList(
                 postings=[1, 2, 3],
@@ -498,12 +525,14 @@ class TestEvaluate:
         right_node = Node(value="term2")
         and_node = Node(value="AND", left=left_node, right=right_node)
 
+        mock_spell_corrector.correct.return_value = ""
+
         result = QueryEngine("")._bool_search(and_node)
 
         expected = [2, 3]
         assert result.postings == expected
 
-    def test_evaluate_or_node(self, mock_inverted_index):
+    def test_evaluate_or_node(self, mock_spell_corrector, mock_inverted_index):
         mock_inverted_index.index.get.side_effect = [
             PostingList(
                 postings=[1, 2],
@@ -521,12 +550,14 @@ class TestEvaluate:
         right_node = Node(value="term2")
         or_node = Node(value="OR", left=left_node, right=right_node)
 
+        mock_spell_corrector.correct.return_value = ""
+
         result = QueryEngine("")._bool_search(or_node)
 
         expected = [1, 2, 3, 4]
         assert result.postings == expected
 
-    def test_evaluate_and_not_node(self, mock_inverted_index):
+    def test_evaluate_and_not_node(self, mock_spell_corrector, mock_inverted_index):
         postings1 = PostingList(
             postings=[1, 2, 3, 4, 5],
             term_frequencies={i: 1 for i in [1, 2, 3, 4, 5]},
@@ -555,13 +586,15 @@ class TestEvaluate:
         not_b = Node(value="NOT", right=node_b)
         root = Node(value="AND", left=node_a, right=not_b)
 
+        mock_spell_corrector.correct.return_value = ""
+
         result = QueryEngine("")._bool_search(root)
 
         expected = [1, 2]
         assert result.postings == expected
         assert set(result.term_frequencies.keys()) == {1, 2}
 
-    def test_evaluate_complex_query(self, mock_inverted_index):
+    def test_evaluate_complex_query(self, mock_spell_corrector, mock_inverted_index):
         # (term1 AND term2) OR term3
         mock_inverted_index.index.get.side_effect = [
             PostingList(
@@ -587,6 +620,8 @@ class TestEvaluate:
         term3 = Node(value="term3")
         or_node = Node(value="OR", left=and_node, right=term3)
 
+        mock_spell_corrector.correct.return_value = ""
+
         result = QueryEngine("")._bool_search(or_node)
 
         expected = [2, 3, 5, 6]
@@ -594,7 +629,9 @@ class TestEvaluate:
 
 
 class TestSearchResults:
-    def test_search_results_basic(self, mock_query_tree, mock_inverted_index):
+    def test_search_results_basic(
+        self, mock_query_tree, mock_spell_corrector, mock_inverted_index
+    ):
         mock_inverted_index.index.get.return_value = PostingList(
             postings=[1, 2, 3],
             term_frequencies={1: 1, 2: 1, 3: 1},
@@ -606,17 +643,21 @@ class TestSearchResults:
             DocInfo(url="http://example.com/3", title="Doc 3"),
         ]
 
+        mock_spell_corrector.correct.return_value = "test"
+
         qe = QueryEngine("test")
         with patch(
             "backend.search_engine.query.query_engine.normalize_search_query",
             return_value=["test"],
         ):
-            results = qe.search_results(limit=10)
+            results = qe.search_results(limit=10).search_results
 
         assert len(results) == 3
         assert all(isinstance(r, SearchResult) for r in results)
 
-    def test_search_results_with_limit(self, mock_query_tree, mock_inverted_index):
+    def test_search_results_with_limit(
+        self, mock_query_tree, mock_spell_corrector, mock_inverted_index
+    ):
         mock_inverted_index.index.get.return_value = PostingList(
             postings=[1, 2, 3, 4, 5],
             term_frequencies={i: 1 for i in range(1, 6)},
@@ -627,26 +668,32 @@ class TestSearchResults:
             for i in range(1, 6)
         ]
 
+        mock_spell_corrector.correct.return_value = "test"
+
         qe = QueryEngine("test")
         with patch(
             "backend.search_engine.query.query_engine.normalize_search_query",
             return_value=["test"],
         ):
-            results = qe.search_results(limit=2)
+            results = qe.search_results(limit=2).search_results
 
         assert len(results) == 2
 
-    def test_search_results_empty(self, mock_query_tree, mock_inverted_index):
+    def test_search_results_empty(
+        self, mock_query_tree, mock_spell_corrector, mock_inverted_index
+    ):
         mock_inverted_index.index.get.return_value = PostingList(
             postings=[], term_frequencies={}, positions={}
         )
 
+        mock_spell_corrector.correct.return_value = "test"
+
         qe = QueryEngine("test")
         with patch(
             "backend.search_engine.query.query_engine.normalize_search_query",
             return_value=["test"],
         ):
-            results = qe.search_results(limit=10)
+            results = qe.search_results(limit=10).search_results
 
         assert len(results) == 0
 
@@ -684,7 +731,9 @@ class TestEdgeCases:
 
 
 class TestIntegration:
-    def test_full_workflow(self, mock_query_tree, mock_inverted_index):
+    def test_full_workflow(
+        self, mock_query_tree, mock_spell_corrector, mock_inverted_index
+    ):
         # (term1 AND term2) OR term3
         mock_inverted_index.index.get.side_effect = [
             PostingList(
@@ -712,12 +761,14 @@ class TestIntegration:
 
         mock_query_tree.root = or_node
 
+        mock_spell_corrector.correct.return_value = "(term1 AND term2) OR term3"
+
         qe = QueryEngine("(term1 AND term2) OR term3")
         with patch(
             "backend.search_engine.query.query_engine.normalize_search_query",
             return_value=["(", "term1", "AND", "term2", ")", "OR", "term3"],
         ):
-            results = qe.search_results(limit=10)
+            results = qe.search_results(limit=10).search_results
 
         assert len(results) == 3
         assert results[0].document_id == 2

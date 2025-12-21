@@ -111,8 +111,11 @@ const Index = () => {
     };
   }, [hasSearched]);
 
+  const [correction, setCorrection] = useState<string | null>(null);
+
   // Handle search request
   const handleSearch = async (query: string, customLimit = limit) => {
+    setCorrection(null);
     setIsLoading(true);
     setError(null);
     setHasSearched(true);
@@ -125,7 +128,7 @@ const Index = () => {
 
     try {
       const response = await fetch(
-        `/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
+        `http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
       );
 
       if (!response.ok) {
@@ -138,8 +141,15 @@ const Index = () => {
       }
 
       const data = await response.json();
-      const searchResults = Array.isArray(data) ? data : data.results || [];
+
+      const searchResults = Array.isArray(data) ? data : data.search_results || [];
       setAllResults(searchResults);
+
+      if (data.correction) {
+        setCorrection(data.correction);
+      } else {
+        setCorrection(null);
+      }
 
       if (searchResults.length === 0) {
         toast({
@@ -336,56 +346,51 @@ const Index = () => {
             {/* Error State */}
             {error && !isLoading && <ErrorState message={error} />}
 
+            {/* Spell correction hint (always visible if available) */}
+            {!isLoading && correction && correction !== currentQuery && (
+              <div className="mt-8 mb-8 text-center">
+                <span className="text-muted-foreground">Did you mean </span>
+                <button
+                  onClick={() => handleSearch(correction!)}
+                  className="text-primary underline font-medium hover:text-primary/80"
+                >
+                  {correction}
+                </button>
+                <span className="text-muted-foreground">?</span>
+              </div>
+            )}
+
             {/* Search Results */}
-            {!isLoading && paginatedResults.length > 0 && (
+            {!isLoading && (
               <>
-                <SearchResults results={paginatedResults} />
+                {paginatedResults.length > 0 ? (
+                  <>
+                    {/* Search Results List */}
+                    <SearchResults results={paginatedResults} />
 
-                {/* Pagination */}
-                {totalPages > 1 && (
-                  <div className="mt-12 mb-8">
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => handlePageChange(currentPage - 1)}
-                        disabled={currentPage === 1}
-                        className="p-2 rounded-lg hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        aria-label="Previous page"
-                      >
-                        <ChevronLeft className="h-5 w-5" />
-                      </button>
-
-                      <div className="flex items-center gap-1">
-                        {getPageNumbers().map((page, index) => (
-                          <button
-                            key={index}
-                            onClick={() => typeof page === "number" && handlePageChange(page)}
-                            disabled={page === "..."}
-                            className={`min-w-[40px] h-10 rounded-lg font-medium transition-colors ${page === currentPage
-                                ? "bg-primary text-primary-foreground"
-                                : page === "..."
-                                  ? "cursor-default"
-                                  : "hover:bg-accent"
-                              }`}
-                          >
-                            {page}
-                          </button>
-                        ))}
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div className="flex justify-center mt-8 space-x-2">
+                        {Array.from({ length: totalPages }, (_, index) => index + 1).map(
+                          (pageNum) => (
+                            <button
+                              key={pageNum}
+                              onClick={() => handlePageChange(pageNum)}
+                              className={`px-4 py-2 rounded ${pageNum === currentPage
+                                  ? "bg-primary text-white"
+                                  : "bg-input text-foreground hover:bg-accent"
+                                }`}
+                            >
+                              {pageNum}
+                            </button>
+                          )
+                        )}
                       </div>
-
-                      <button
-                        onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage === totalPages}
-                        className="p-2 rounded-lg hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        aria-label="Next page"
-                      >
-                        <ChevronRight className="h-5 w-5" />
-                      </button>
-                    </div>
-
-                    {/* Results info */}
-                    <p className="text-center text-sm text-muted-foreground mt-4">
-                      Showing {startIndex + 1}-{Math.min(endIndex, allResults.length)} of {allResults.length} results
-                    </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center text-muted-foreground mt-6">
+                    No results found.
                   </div>
                 )}
               </>
