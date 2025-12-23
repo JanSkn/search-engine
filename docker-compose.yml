@@ -6,8 +6,9 @@ services:
     container_name: seekr-backend
     ports:
       - "8000:8000" # expose backend for FE-less API access
-    volumes: # bind mount index data
-      - ./src/backend/index_builder:/app/src/backend/index_builder
+    volumes: # bind mount large data files
+      - ./src/backend/search_engine/index_builder:/app/src/backend/search_engine/index_builder
+      - ./src/backend/search_engine/models/neuspell-scrnn-probwordnoise:/app/src/backend/search_engine/models/neuspell-scrnn-probwordnoise
   frontend:
     build: src/frontend
     container_name: seekr-frontend

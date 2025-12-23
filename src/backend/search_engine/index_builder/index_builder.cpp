@@ -267,12 +267,10 @@ int main(int argc, char* argv[]) {
     std::string outputDir =
         (projectRoot.parent_path() / "index" / "bin")
             .string();  // put in parallel directory index/ where python code expects it
-    std::string metadataDir = outputDir + "/metadata.bin";
     std::string docstoreBase = outputDir;
 
     std::filesystem::create_directories(partialIndexPostingsDir);
     std::filesystem::create_directories(partialIndexDictDir);
-    std::filesystem::create_directories(metadataDir);
     std::filesystem::create_directories(outputDir);
 
     Tokenizer tokenizer;
@@ -373,31 +371,8 @@ int main(int argc, char* argv[]) {
         const char* contentStart = line.data() + pos3 + 1;
         size_t contentLen = line.size() - pos3 - 1;
 
-        // process title
-        tokenizer.tokenize(titleStart, titleLen, [&](std::string&& term, int position) {
-            docTermCount++;
-
-            uint32_t termId;
-            auto it = termDictionary.find(term);
-            if (it == termDictionary.end()) {
-                termId = termDictionary.size();
-                memoryBytes += sizeof(uint32_t) + term.size();
-                termDictionary.emplace(std::move(term), termId);
-            } else {
-                termId = it->second;
-            }
-
-            auto& postings = termPostings[termId];
-            if (postings.empty() || postings.back().docId != docId) {
-                postings.push_back({docId, {}});
-                postings.back().positions.reserve(8);
-                postings.back().positions.push_back(position);
-                memoryBytes += sizeof(Posting) + sizeof(int);
-            } else {
-                postings.back().positions.push_back(position);
-                memoryBytes += sizeof(int);
-            }
-        });
+        tokenizer.tokenize(titleStart, titleLen,
+                           [&](std::string&& term, int position) { docTermCount++; });
 
         // process content (positions continue from title)
         tokenizer.tokenize(contentStart, contentLen, [&](std::string&& term, int position) {
@@ -450,7 +425,7 @@ int main(int argc, char* argv[]) {
     }
     double avgDocLength = numDocs > 0 ? static_cast<double>(totalTerms) / numDocs : 0.0;
 
-    std::string metadataFile = metadataDir + "/metadata.bin";
+    std::string metadataFile = outputDir + "/metadata.bin";
     std::ofstream metaOut(metadataFile, std::ios::binary);
     if (!metaOut) {
         std::cerr << "Failed to open metadata file for writing\n";

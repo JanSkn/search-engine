@@ -124,16 +124,16 @@ def test_real_index_docstore():
     doc_store = inverted_index.doc_store
 
     expected_docs = {
-        0: DocInfo("http://example.com/0", "Title One"),
-        1: DocInfo("http://example.com/1", "Title Two"),
-        2: DocInfo("http://example.com/2", "Title Three"),
-        3: DocInfo("http://example.com/3", "Title Four"),
-        4: DocInfo("http://example.com/4", "Title Five"),
-        5: DocInfo("http://example.com/5", "Title Six"),
-        6: DocInfo("http://example.com/6", "Title Seven"),
-        7: DocInfo("http://example.com/7", "Title Eight"),
-        8: DocInfo("http://example.com/8", "Title Nine"),
-        9: DocInfo("http://example.com/9", "Title Ten"),
+        0: DocInfo("http://example.com/0", "Title One", snippet=""),
+        1: DocInfo("http://example.com/1", "Title Two", snippet=""),
+        2: DocInfo("http://example.com/2", "Title Three", snippet=""),
+        3: DocInfo("http://example.com/3", "Title Four", snippet=""),
+        4: DocInfo("http://example.com/4", "Title Five", snippet=""),
+        5: DocInfo("http://example.com/5", "Title Six", snippet=""),
+        6: DocInfo("http://example.com/6", "Title Seven", snippet=""),
+        7: DocInfo("http://example.com/7", "Title Eight", snippet=""),
+        8: DocInfo("http://example.com/8", "Title Nine", snippet=""),
+        9: DocInfo("http://example.com/9", "Title Ten", snippet=""),
     }
 
     for doc_id, doc_info in expected_docs.items():

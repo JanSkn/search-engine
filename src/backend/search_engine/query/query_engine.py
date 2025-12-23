@@ -137,6 +137,9 @@ class QueryEngine:
         correction = repl(self.corrector, raw_query)
 
         if not qt._has_operators(normalized_tokens):
+            self.inverted_index.doc_store.query_terms = list(
+                set(normalized_tokens)
+            )  # needed for snippets
             if (raw_query.startswith('"') and raw_query.endswith('"')) or (
                 raw_query.startswith("'") and raw_query.endswith("'")
             ):
@@ -156,7 +159,9 @@ class QueryEngine:
             logger.debug("Executing bool query search...")
             try:
                 qt.parse_query(normalized_tokens)
-                # self.inverted_index.doc_store.query_terms = qt.unique_terms
+                self.inverted_index.doc_store.query_terms = (
+                    qt.unique_terms
+                )  # needed for snippets
                 logger.debug(f"Query tree: {qt.root}")
                 result = self._bool_search(qt.root)
             except InvalidOperatorError as e:
@@ -169,10 +174,6 @@ class QueryEngine:
         logger.debug(
             f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
         )
-
-        # resulting PostingList contains all matched documents
-        # tf and positions are empty (except positions for positional search) as they
-        # are term-specific and cannot be merged meaningfully here
 
         top_n_results = result  # TODO will be done by BM25 ranking later
 
@@ -205,4 +206,7 @@ class QueryEngine:
             f"Returned {len(search_results)} results. "
             f"Total execution time: {end - start:.6f} seconds"
         )
+        # clear cache to free memory
+        self.inverted_index.clear_cache()
+        
         return SearchResults(search_results=search_results, correction=correction)

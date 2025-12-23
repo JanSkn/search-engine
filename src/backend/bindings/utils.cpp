@@ -1,19 +1,69 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>  // for automatic conversion of STL containers
 
-#include <iostream>
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <memory>
 
 #include "libstemmer.h"
 
 namespace py = pybind11;
+
+bool is_valid_utf8(const std::string& s) {
+    const unsigned char* b = reinterpret_cast<const unsigned char*>(s.data());
+    size_t n = s.size();
+
+    for (size_t i = 0; i < n; ++i) {
+        if (b[i] <= 0x7F) continue;
+
+        size_t len = 0;
+        if ((b[i] & 0xE0) == 0xC0)
+            len = 1;
+        else if ((b[i] & 0xF0) == 0xE0)
+            len = 2;
+        else if ((b[i] & 0xF8) == 0xF0)
+            len = 3;
+        else
+            return false;
+
+        if (i + len >= n) return false;
+
+        for (size_t j = 1; j <= len; ++j) {
+            if ((b[i + j] & 0xC0) != 0x80) return false;
+        }
+        i += len;
+    }
+    return true;
+}
+
+std::string latin1_to_utf8(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() * 2);
+
+    for (unsigned char c : s) {
+        if (c < 0x80) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back(static_cast<char>(0xC0 | (c >> 6)));
+            out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+        }
+    }
+    return out;
+}
+
+std::string ensure_utf8(const std::string& s) {
+    if (is_valid_utf8(s)) {
+        return s;
+    }
+    return latin1_to_utf8(s);
+}
 
 struct SnowballStemmer {
     struct sb_stemmer* stemmer;
@@ -83,8 +133,10 @@ struct Metadata {
     std::unordered_map<uint32_t, uint32_t> doc_lengths;
 
     void load(const std::string& path) {
+        std::cout << "Metadata: " << path << std::endl;
         std::ifstream in(path, std::ios::binary);
         if (!in.is_open()) throw std::runtime_error("Cannot open metadata file");
+        if (in.peek() == EOF) throw std::runtime_error("Metadata file is empty");
 
         in.read(reinterpret_cast<char*>(&num_docs), sizeof(num_docs));
         in.read(reinterpret_cast<char*>(&avg_doc_length), sizeof(avg_doc_length));
@@ -151,6 +203,34 @@ PostingList read_posting_list(std::ifstream& in, uint64_t offset, uint32_t doc_f
     return pl;
 }
 
+// Optimized helper to only read positions for one document for snippetting
+std::vector<uint32_t> scan_posting_list_for_doc(std::ifstream& in, uint64_t offset,
+                                                uint32_t doc_freq, uint32_t target_doc_id) {
+    in.seekg(offset);
+
+    for (uint32_t i = 0; i < doc_freq; i++) {
+        uint32_t doc_id, pos_count;
+        in.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id));
+        in.read(reinterpret_cast<char*>(&pos_count), sizeof(pos_count));
+
+        if (doc_id == target_doc_id) {
+            std::vector<uint32_t> positions(pos_count);
+            in.read(reinterpret_cast<char*>(positions.data()), pos_count * sizeof(uint32_t));
+            return positions;
+        }
+
+        // if we passed the doc_id (list is sorted), it's not there
+        if (doc_id > target_doc_id) {
+            return {};
+        }
+
+        // skip positions for this doc
+        in.seekg(pos_count * sizeof(uint32_t), std::ios::cur);
+    }
+
+    return {};
+}
+
 struct DocInfo {
     std::string url;
     std::string title;
@@ -201,11 +281,6 @@ class DocStore {
                              uint64_t tsv_offset);
     std::string get_snippet(uint32_t doc_id, uint64_t tsv_offset);
     std::optional<DocInfo> get(uint32_t doc_id);
-    std::optional<uint64_t> get_tsv_offset(uint32_t doc_id) {
-        auto it = offsets.find(doc_id);
-        if (it == offsets.end()) return std::nullopt;
-        return it->second.tsv_offset;
-    }
     uint32_t size() const { return total_docs; }
 };
 
@@ -229,6 +304,10 @@ class InvertedIndex {
     Metadata metadata;
     DocStore doc_store;
     IndexAccessor index;
+
+    // Query cache for performance (especially snippeting of rare + common term combos)
+    std::unordered_map<std::string, std::shared_ptr<PostingList>> cache;
+    void clear_cache() { cache.clear(); }
 
     InvertedIndex(const std::string& base_path) : doc_store(this), index(this) {
         std::ifstream index_file(base_path + "/index.bin", std::ios::binary);
@@ -263,8 +342,14 @@ class InvertedIndex {
 // --- Docstore ---
 void DocStore::open(const std::string& dir_name) {
     data_in.open(dir_name + "/docstore.bin", std::ios::binary);
-    // TODO falscher pfad?
-    tsv_in.open(dir_name + "/../../index_builder/data/msmarco-docs.tsv", std::ios::binary);
+    std::string data_dir = "data";
+    const char* test_env = std::getenv(
+        "ENV");  // for integration tests, test with controlled and small dataset in test_data
+    if (test_env && std::string(test_env) == "TEST_ENV") {
+        data_dir = "test_data";
+    }
+    tsv_in.open(dir_name + "/../../index_builder/" + data_dir + "/msmarco-docs.tsv",
+                std::ios::binary);
     std::ifstream off(dir_name + "/docstore_offsets.bin", std::ios::binary);
 
     if (!data_in || !tsv_in || !off) throw std::runtime_error("Could not open docstore");
@@ -279,7 +364,7 @@ void DocStore::open(const std::string& dir_name) {
 
         if (!off.read(reinterpret_cast<char*>(&id), sizeof(id))) break;
         if (!off.read(reinterpret_cast<char*>(&off64), sizeof(off64))) break;
-        // if (!off.read(reinterpret_cast<char*>(&tsvOff), sizeof(tsvOff))) break;
+        if (!off.read(reinterpret_cast<char*>(&tsvOff), sizeof(tsvOff))) break;
 
         offsets[id] = {off64, tsvOff};
     }
@@ -407,9 +492,10 @@ std::string DocStore::load_snippet(uint32_t doc_id,
         }
     }
 
-    return snippet;
+    return ensure_utf8(snippet);
 }
 
+// !!!! TODO MARK word with <b></b>
 DocStore::SubsnippetResult DocStore::find_subsnippet(const std::vector<Hit>& hits,
                                                      int max_window_size,
                                                      size_t required_term_count) {
@@ -478,15 +564,26 @@ std::string DocStore::get_snippet(uint32_t doc_id, uint64_t tsv_offset) {
     // term: "bar"} ]
     std::vector<Hit> hits;
     for (const auto& term : unique_terms) {
+        auto cache_it = parent->cache.find(term);
+        if (cache_it != parent->cache.end()) {
+             const auto& pl = *cache_it->second;
+             auto posIt = pl.positions.find(doc_id);
+             if (posIt != pl.positions.end()) {
+                 for (uint32_t pos : posIt->second) hits.push_back(Hit{pos, term});
+             }
+             continue;
+        }
+
         auto termIt = parent->term_to_offset.find(term);
         if (termIt == parent->term_to_offset.end()) continue;
         auto docIt = parent->term_to_docfreq.find(term);
-        PostingList pl = read_posting_list(parent->postings_file, termIt->second, docIt->second);
 
-        auto posIt = pl.positions.find(doc_id);
-        if (posIt == pl.positions.end()) continue;
+        std::vector<uint32_t> positions =
+            scan_posting_list_for_doc(parent->postings_file, termIt->second, docIt->second, doc_id);
 
-        for (uint32_t pos : posIt->second) hits.push_back(Hit{pos, term});
+        if (positions.empty()) continue;
+
+        for (uint32_t pos : positions) hits.push_back(Hit{pos, term});
     }
     std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.pos < b.pos; });
 
@@ -507,7 +604,8 @@ std::string DocStore::get_snippet(uint32_t doc_id, uint64_t tsv_offset) {
     return load_snippet(doc_id, snippet_windows, tsv_offset);
 }
 
-std::optional<DocInfo> DocStore::get(uint32_t doc_id) {
+std::optional<DocInfo> DocStore::get(
+    uint32_t doc_id) {  // only load snippet when required as resource-intensive
     auto it = offsets.find(doc_id);
     if (it == offsets.end()) return std::nullopt;
 
@@ -527,17 +625,26 @@ std::optional<DocInfo> DocStore::get(uint32_t doc_id) {
     std::string title(title_len, '\0');
     data_in.read(title.data(), title_len);
 
-    // std::string snippet = get_snippet(doc_id, tsv_offset);
-
-    return DocInfo{url, title, "snippet"};
+    std::string snippet = get_snippet(doc_id, tsv_offset);
+    return DocInfo{url, title, snippet};
 }
 // --------------------
 
 std::optional<PostingList> IndexAccessor::get(const std::string& term) {
+    // Check cache
+    auto cache_it = parent->cache.find(term);
+    if (cache_it != parent->cache.end()) {
+        return *cache_it->second;
+    }
+
     auto it = parent->term_to_offset.find(term);
     if (it == parent->term_to_offset.end()) return std::nullopt;
     uint32_t doc_freq = parent->term_to_docfreq.at(term);
     PostingList pl = read_posting_list(parent->postings_file, it->second, doc_freq);
+    
+    // Add to cache
+    parent->cache[term] = std::make_shared<PostingList>(pl);
+    
     return pl;
 }
 
@@ -595,6 +702,7 @@ PostingList positional_intersect(const PostingList& pl1, const PostingList& pl2,
 
                 if (!valid_positions.empty()) {
                     result.postings.push_back(doc_id);
+                    result.term_frequencies[doc_id] = valid_positions.size();
                     result.positions[doc_id] = std::move(valid_positions);
                 }
             }
@@ -643,16 +751,19 @@ PostingList find_docs(const PostingList& pl1, const PostingList& pl2, const std:
     const size_t n1 = p1.size();
     const size_t n2 = p2.size();
 
-    if (mode == "AND") {
-        std::vector<uint32_t> intersected;
-        intersected.reserve(std::min(n1, n2));  // most likely
+    std::vector<uint32_t> result_postings;
+    result_postings.reserve(std::min(n1, n2));  // most likely
 
+    std::unordered_map<uint32_t, uint32_t> result_tf;
+
+    if (mode == "AND") {
         while (i < n1 && j < n2) {
             uint32_t d1 = p1[i];
             uint32_t d2 = p2[j];
 
             if (d1 == d2) {
-                intersected.push_back(d1);
+                result_postings.push_back(d1);
+                result_tf[d1] = tf1.at(d1) + tf2.at(d2);
 
                 i++;
                 j++;
@@ -673,7 +784,7 @@ PostingList find_docs(const PostingList& pl1, const PostingList& pl2, const std:
             }
         }
 
-        PostingList out(intersected, {}, {});
+        PostingList out(result_postings, result_tf, {});
         out.build_skip_pointers();
         return out;
     }
@@ -690,13 +801,16 @@ PostingList find_docs(const PostingList& pl1, const PostingList& pl2, const std:
 
             if (x == y) {
                 merged.push_back(x);
+                result_tf[x] = tf1.at(x) + tf2.at(y);
                 a++;
                 b++;
             } else if (x < y) {
                 merged.push_back(x);
+                result_tf[x] = tf1.at(x);
                 a++;
             } else {
                 merged.push_back(y);
+                result_tf[y] = tf2.at(y);
                 b++;
             }
         }
@@ -705,14 +819,16 @@ PostingList find_docs(const PostingList& pl1, const PostingList& pl2, const std:
         while (a < n1) {
             uint32_t x = p1[a++];
             merged.push_back(x);
+            result_tf[x] = tf1.at(x);
         }
 
         while (b < n2) {
             uint32_t y = p2[b++];
             merged.push_back(y);
+            result_tf[y] = tf2.at(y);
         }
 
-        PostingList out(merged, {}, {});
+        PostingList out(merged, result_tf, {});
         out.build_skip_pointers();
         return out;
     }
@@ -731,11 +847,12 @@ PostingList find_docs(const PostingList& pl1, const PostingList& pl2, const std:
 
             if (b == n2 || p2[b] != x) {
                 diff.push_back(x);
+                result_tf[x] = tf1.at(x);
             }
             a++;
         }
 
-        PostingList out(diff, {}, {});
+        PostingList out(diff, result_tf, {});
         out.build_skip_pointers();
         return out;
     }
@@ -784,7 +901,7 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<DocStore>(m, "DocStore")
         .def("get", &DocStore::get, py::arg("doc_id"))
-        .def("get_tsv_offset", &DocStore::get_tsv_offset, py::arg("doc_id"));
+        .def_readwrite("query_terms", &DocStore::query_terms);
 
     py::class_<IndexAccessor>(m, "IndexAccessor").def("get", &IndexAccessor::get, py::arg("term"));
 
@@ -792,5 +909,6 @@ PYBIND11_MODULE(_core, m) {
         .def(py::init<const std::string&>())
         .def_readonly("index", &InvertedIndex::index)
         .def_readonly("metadata", &InvertedIndex::metadata)
-        .def_readonly("doc_store", &InvertedIndex::doc_store);
+        .def_readonly("doc_store", &InvertedIndex::doc_store)
+        .def("clear_cache", &InvertedIndex::clear_cache);
 }

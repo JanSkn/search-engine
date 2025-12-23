@@ -638,9 +638,9 @@ class TestSearchResults:
             positions={1: [0], 2: [1], 3: [2]},
         )
         mock_inverted_index.doc_store.get.side_effect = [
-            DocInfo(url="http://example.com/1", title="Doc 1"),
-            DocInfo(url="http://example.com/2", title="Doc 2"),
-            DocInfo(url="http://example.com/3", title="Doc 3"),
+            DocInfo(url="http://example.com/1", title="Doc 1", snippet=""),
+            DocInfo(url="http://example.com/2", title="Doc 2", snippet=""),
+            DocInfo(url="http://example.com/3", title="Doc 3", snippet=""),
         ]
 
         mock_spell_corrector.correct.return_value = "test"
@@ -664,7 +664,7 @@ class TestSearchResults:
             positions={i: [0] for i in range(1, 6)},
         )
         mock_inverted_index.doc_store.get.side_effect = [
-            DocInfo(url=f"http://example.com/{i}", title=f"Doc {i}")
+            DocInfo(url=f"http://example.com/{i}", title=f"Doc {i}", snippet="")
             for i in range(1, 6)
         ]
 
@@ -750,7 +750,8 @@ class TestIntegration:
         ]
 
         mock_inverted_index.doc_store.get.side_effect = [
-            DocInfo(url=f"http://example.com/{i}", title=f"Doc {i}") for i in [2, 3, 5]
+            DocInfo(url=f"http://example.com/{i}", title=f"Doc {i}", snippet="")
+            for i in [2, 3, 5]
         ]
 
         term1 = Node(value="term1")

@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 interface SearchResult {
   title: string;
   url: string;
-  description?: string;
+  snippet?: string;
 }
 
 interface SearchResultsProps {
@@ -37,9 +37,9 @@ export const SearchResults = ({ results }: SearchResultsProps) => {
                 <p className="text-sm text-muted-foreground mb-2 truncate">
                   {result.url}
                 </p>
-                {result.description && (
+                {(result.snippet) && (
                   <p className="text-foreground line-clamp-2">
-                    {result.description}
+                    <span dangerouslySetInnerHTML={{ __html: result.snippet || "" }} />
                   </p>
                 )}
               </div>
