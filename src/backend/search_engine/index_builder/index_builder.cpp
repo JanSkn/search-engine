@@ -127,13 +127,13 @@ class Tokenizer {
         size_t i = 0;
 
         while (i < len) {
-            while (i < len && !std::isalpha(static_cast<unsigned char>(text[i]))) {
+            while (i < len && !std::isalnum(static_cast<unsigned char>(text[i]))) {
                 i++;
             }
             if (i >= len) break;
 
             tokenBuffer.clear();
-            while (i < len && std::isalpha(static_cast<unsigned char>(text[i]))) {
+            while (i < len && std::isalnum(static_cast<unsigned char>(text[i]))) {
                 tokenBuffer.push_back(std::tolower(static_cast<unsigned char>(text[i])));
                 i++;
             }
@@ -371,6 +371,7 @@ int main(int argc, char* argv[]) {
         const char* contentStart = line.data() + pos3 + 1;
         size_t contentLen = line.size() - pos3 - 1;
 
+        // do not store title positions as it would mix with body positions
         tokenizer.tokenize(titleStart, titleLen,
                            [&](std::string&& term, int position) { docTermCount++; });
 

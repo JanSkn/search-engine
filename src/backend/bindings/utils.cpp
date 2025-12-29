@@ -1,3 +1,4 @@
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>  // for automatic conversion of STL containers
 
@@ -5,12 +6,12 @@
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <memory>
 
 #include "libstemmer.h"
 
@@ -268,7 +269,8 @@ class DocStore {
     };
 
     SubsnippetResult find_subsnippet(const std::vector<Hit>& hits, int max_window_size,
-                                     size_t required_term_count);
+                                     size_t required_term_count,
+                                     std::vector<std::vector<uint32_t>>& term_positions);
 
    public:
     std::vector<std::string> query_terms;
@@ -277,10 +279,12 @@ class DocStore {
 
     void open(const std::string& dir_name);
     std::string load_snippet(uint32_t doc_id,
-                             std::vector<std::pair<uint32_t, uint32_t>>& snippet_windows,
+                             std::vector<std::pair<uint32_t, uint32_t>>& snippet_window_borders,
+                             std::vector<std::vector<uint32_t>>& term_positions,
                              uint64_t tsv_offset);
     std::string get_snippet(uint32_t doc_id, uint64_t tsv_offset);
     std::optional<DocInfo> get(uint32_t doc_id);
+    std::optional<uint64_t> get_tsv_offset(uint32_t doc_id);
     uint32_t size() const { return total_docs; }
 };
 
@@ -370,12 +374,12 @@ void DocStore::open(const std::string& dir_name) {
     }
 }
 
-std::string DocStore::load_snippet(uint32_t doc_id,
-                                   std::vector<std::pair<uint32_t, uint32_t>>& snippet_windows,
-                                   uint64_t tsv_offset) {
-    if (snippet_windows.empty()) return "";
+std::string DocStore::load_snippet(
+    uint32_t doc_id, std::vector<std::pair<uint32_t, uint32_t>>& snippet_window_borders,
+    std::vector<std::vector<uint32_t>>& term_positions, uint64_t tsv_offset) {
+    if (snippet_window_borders.empty()) return "";
 
-    std::sort(snippet_windows.begin(), snippet_windows.end());
+    std::sort(snippet_window_borders.begin(), snippet_window_borders.end());
     tsv_in.clear();
     tsv_in.seekg(tsv_offset);
     std::string line;
@@ -402,7 +406,7 @@ std::string DocStore::load_snippet(uint32_t doc_id,
     size_t i = content_start;
     size_t window_idx = 0;
 
-    if (snippet_windows[0].first > 0) {
+    if (snippet_window_borders[0].first > 0) {
         snippet += "... ";
     }
 
@@ -410,17 +414,22 @@ std::string DocStore::load_snippet(uint32_t doc_id,
     auto is_sentence_end = [](char c) { return c == '.' || c == '!' || c == '?'; };
 
     // Calculate threshold for last window (last 10%)
-    uint32_t last_window_start = snippet_windows.back().first;
-    uint32_t last_window_end = snippet_windows.back().second;
+    uint32_t last_window_start = snippet_window_borders.back().first;
+    uint32_t last_window_end = snippet_window_borders.back().second;
     uint32_t last_window_size = last_window_end - last_window_start + 1;
     uint32_t last_window_threshold = last_window_end - (last_window_size / 10);
 
     bool stopped_at_sentence_end = false;
 
-    while (i < len && window_idx < snippet_windows.size()) {
+    while (i < len && window_idx < snippet_window_borders.size()) {
+        std::set<uint32_t> highlight_positions;
+        if (window_idx < term_positions.size()) {
+            highlight_positions = std::set<uint32_t>(term_positions[window_idx].begin(),
+                                                     term_positions[window_idx].end());
+        }
         // --- determine word ---
         size_t word_start = i;
-        while (word_start < len && !std::isalpha(static_cast<unsigned char>(line[word_start]))) {
+        while (word_start < len && !std::isalnum(static_cast<unsigned char>(line[word_start]))) {
             word_start++;
         }
         std::string separator = line.substr(i, word_start - i);
@@ -429,7 +438,7 @@ std::string DocStore::load_snippet(uint32_t doc_id,
             break;
         }
         size_t word_end = word_start;
-        while (word_end < len && std::isalpha(static_cast<unsigned char>(line[word_end]))) {
+        while (word_end < len && std::isalnum(static_cast<unsigned char>(line[word_end]))) {
             word_end++;
         }
         std::string word = line.substr(word_start, word_end - word_start);
@@ -437,19 +446,24 @@ std::string DocStore::load_snippet(uint32_t doc_id,
 
         // check if current word is in relevant window
         // skip windows that are already passed
-        while (window_idx < snippet_windows.size() &&
-               current_word_pos > snippet_windows[window_idx].second) {
+        while (window_idx < snippet_window_borders.size() &&
+               current_word_pos > snippet_window_borders[window_idx].second) {
             window_idx++;
-            if (window_idx < snippet_windows.size()) {
+            if (window_idx < snippet_window_borders.size()) {
                 snippet += " ... ";
             }
         }
 
-        if (window_idx < snippet_windows.size()) {
-            uint32_t w_start = snippet_windows[window_idx].first;
-            uint32_t w_end = snippet_windows[window_idx].second;
+        if (window_idx < snippet_window_borders.size()) {
+            uint32_t w_start = snippet_window_borders[window_idx].first;
+            uint32_t w_end = snippet_window_borders[window_idx].second;
 
             if (current_word_pos >= w_start && current_word_pos <= w_end) {
+                // highlight a found term
+                if (highlight_positions.count(current_word_pos)) {
+                    word = "<b>" + word + "</b>";
+                }
+
                 if (current_word_pos == w_start) {
                     snippet += word;
                 } else {
@@ -457,7 +471,7 @@ std::string DocStore::load_snippet(uint32_t doc_id,
                 }
 
                 // check if we're in the last window and in its last 10%
-                bool is_last_window = (window_idx == snippet_windows.size() - 1);
+                bool is_last_window = (window_idx == snippet_window_borders.size() - 1);
                 if (is_last_window && current_word_pos >= last_window_threshold &&
                     current_word_pos < w_end) {
                     // look for sentence-ending punctuation after this word
@@ -484,9 +498,9 @@ std::string DocStore::load_snippet(uint32_t doc_id,
     }
 
     // check if there is more text after the snippets (only if we didn't stop at sentence end)
-    if (!stopped_at_sentence_end && window_idx >= snippet_windows.size()) {
+    if (!stopped_at_sentence_end && window_idx >= snippet_window_borders.size()) {
         size_t check = i;
-        while (check < len && !std::isalpha(static_cast<unsigned char>(line[check]))) check++;
+        while (check < len && !std::isalnum(static_cast<unsigned char>(line[check]))) check++;
         if (check < len) {
             snippet += " ...";
         }
@@ -495,17 +509,17 @@ std::string DocStore::load_snippet(uint32_t doc_id,
     return ensure_utf8(snippet);
 }
 
-// !!!! TODO MARK word with <b></b>
-DocStore::SubsnippetResult DocStore::find_subsnippet(const std::vector<Hit>& hits,
-                                                     int max_window_size,
-                                                     size_t required_term_count) {
+DocStore::SubsnippetResult DocStore::find_subsnippet(
+    const std::vector<Hit>& hits, int max_window_size, size_t required_term_count,
+    std::vector<std::vector<uint32_t>>& term_positions) {
     SubsnippetResult result{};
     result.start = 0;
     result.end = 0;
 
     if (hits.empty()) return result;
 
-    std::unordered_map<std::string, uint32_t> window_term_count;
+    std::unordered_map<std::string, uint32_t>
+        window_term_count;  // count term occurance in the window
 
     uint32_t left = 0;
     uint32_t best_start = hits[0].pos;
@@ -519,7 +533,7 @@ DocStore::SubsnippetResult DocStore::find_subsnippet(const std::vector<Hit>& hit
     for (uint32_t right = 0; right < hits.size(); ++right) {
         window_term_count[hits[right].term]++;
 
-        // shrink window if too large
+        // shrink window if too large, adjust term counts
         while (hits[right].pos - hits[left].pos > max_window_size) {
             auto& c = window_term_count[hits[left].term];
             if (--c == 0) window_term_count.erase(hits[left].term);
@@ -545,18 +559,34 @@ DocStore::SubsnippetResult DocStore::find_subsnippet(const std::vector<Hit>& hit
     result.start = best_start;
     result.end = best_end;
 
-    // collect remaining hits outside the best window
+    // collect left hits (only relevant if called by first window for second window)
     result.remaining_hits.reserve(hits.size());
     for (uint32_t i = 0; i < hits.size(); ++i) {
-        if (i < best_left_idx || i > best_right_idx) result.remaining_hits.push_back(hits[i]);
+        if (i > best_right_idx) result.remaining_hits.push_back(hits[i]);
     }
+
+    // for highlighting positions bold
+    std::vector<uint32_t> window_positions;
+
+    for (const auto& hit : hits) {
+        if (hit.pos >= best_start && hit.pos <= best_end) {
+            window_positions.push_back(hit.pos);
+        }
+    }
+
+    term_positions.push_back(window_positions);
 
     return result;
 }
 
 // total snippet length: max. MAX_WINDOW_SIZE x 2 + 1 or 2x "..."
 std::string DocStore::get_snippet(uint32_t doc_id, uint64_t tsv_offset) {
-    uint32_t MAX_WINDOW_SIZE = 15;  // num of words PER subsnippet
+    int MAX_WINDOW_SIZE = 15;  // max. num of words PER subsnippet
+
+    if (query_terms.empty()) {
+        throw std::runtime_error(
+            "Set query_terms (not empty): InvertedIndex().doc_store.query_terms = ...");
+    }
     std::set<std::string> unique_terms(query_terms.begin(), query_terms.end());
 
     // e.g.
@@ -566,42 +596,84 @@ std::string DocStore::get_snippet(uint32_t doc_id, uint64_t tsv_offset) {
     for (const auto& term : unique_terms) {
         auto cache_it = parent->cache.find(term);
         if (cache_it != parent->cache.end()) {
-             const auto& pl = *cache_it->second;
-             auto posIt = pl.positions.find(doc_id);
-             if (posIt != pl.positions.end()) {
-                 for (uint32_t pos : posIt->second) hits.push_back(Hit{pos, term});
-             }
-             continue;
+            const auto& pl = *cache_it->second;
+            auto posIt = pl.positions.find(doc_id);
+            if (posIt != pl.positions.end()) {
+                for (uint32_t pos : posIt->second) hits.push_back(Hit{pos, term});
+            }
+            continue;
         }
 
+        // --- term not found in cache ---
         auto termIt = parent->term_to_offset.find(term);
         if (termIt == parent->term_to_offset.end()) continue;
         auto docIt = parent->term_to_docfreq.find(term);
 
         std::vector<uint32_t> positions =
             scan_posting_list_for_doc(parent->postings_file, termIt->second, docIt->second, doc_id);
-
         if (positions.empty()) continue;
 
         for (uint32_t pos : positions) hits.push_back(Hit{pos, term});
+        // ---------------------------------
     }
     std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.pos < b.pos; });
 
+    std::vector<std::vector<uint32_t>> term_positions;  // positions of the search terms in window i
+    // example: [[1, 3, 5], [2, 5]], in window 0 (index 0): term A and B at pos. 1, 3, 5, etc.
     // create first optimal snippet
-    SubsnippetResult first_snippet = find_subsnippet(hits, MAX_WINDOW_SIZE, unique_terms.size());
+    SubsnippetResult first_snippet =
+        find_subsnippet(hits, MAX_WINDOW_SIZE, unique_terms.size(), term_positions);
 
     // can be one if all terms fit into MAX_WINDOW_SIZE, or at most 2 for remaining terms
     // not more than 2 for readability
-    std::vector<std::pair<uint32_t, uint32_t>> snippet_windows;
-    snippet_windows.push_back({first_snippet.start, first_snippet.end});
+    std::vector<std::pair<uint32_t, uint32_t>> snippet_window_borders;
+    snippet_window_borders.push_back({first_snippet.start, first_snippet.end});
 
     if (!first_snippet.remaining_hits.empty()) {
-        SubsnippetResult second_snippet =
-            find_subsnippet(first_snippet.remaining_hits, MAX_WINDOW_SIZE, unique_terms.size());
-        snippet_windows.push_back({second_snippet.start, second_snippet.end});
+        SubsnippetResult second_snippet = find_subsnippet(
+            first_snippet.remaining_hits, MAX_WINDOW_SIZE, unique_terms.size(), term_positions);
+
+        if (second_snippet.end > 0) {
+            snippet_window_borders.push_back({second_snippet.start, second_snippet.end});
+        }
     }
 
-    return load_snippet(doc_id, snippet_windows, tsv_offset);
+    // enhance context if windows are too small
+    int total_budget = MAX_WINDOW_SIZE * 2;
+
+    if (snippet_window_borders.size() == 1) {
+        // only one window --> can consume 2x the size
+        auto& [start, end] = snippet_window_borders[0];
+        int window_len = end - start;
+        int remaining = total_budget - window_len;
+        int left_context = remaining / 2;
+        int right_context = remaining - left_context;
+
+        start = (start >= left_context) ? start - left_context : 0;
+        end = end + right_context;
+
+    } else {
+        // 2 windows --> half each
+        int budget_per_window = total_budget / snippet_window_borders.size();
+
+        for (auto& [start, end] : snippet_window_borders) {
+            int window_len = end - start;
+            int remaining = budget_per_window - window_len;
+            int left_context = remaining / 2;
+            int right_context = remaining - left_context;
+
+            start = (start >= left_context) ? start - left_context : 0;
+            end = end + right_context;
+        }
+    }
+
+    return load_snippet(doc_id, snippet_window_borders, term_positions, tsv_offset);
+}
+
+std::optional<uint64_t> DocStore::get_tsv_offset(uint32_t doc_id) {
+    auto it = offsets.find(doc_id);
+    if (it == offsets.end()) return std::nullopt;
+    return it->second.tsv_offset;
 }
 
 std::optional<DocInfo> DocStore::get(
@@ -641,10 +713,10 @@ std::optional<PostingList> IndexAccessor::get(const std::string& term) {
     if (it == parent->term_to_offset.end()) return std::nullopt;
     uint32_t doc_freq = parent->term_to_docfreq.at(term);
     PostingList pl = read_posting_list(parent->postings_file, it->second, doc_freq);
-    
+
     // Add to cache
     parent->cache[term] = std::make_shared<PostingList>(pl);
-    
+
     return pl;
 }
 
@@ -901,6 +973,7 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<DocStore>(m, "DocStore")
         .def("get", &DocStore::get, py::arg("doc_id"))
+        .def("get_tsv_offset", &DocStore::get_tsv_offset, py::arg("doc_id"))
         .def_readwrite("query_terms", &DocStore::query_terms);
 
     py::class_<IndexAccessor>(m, "IndexAccessor").def("get", &IndexAccessor::get, py::arg("term"));

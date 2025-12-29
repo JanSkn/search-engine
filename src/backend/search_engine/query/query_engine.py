@@ -208,5 +208,5 @@ class QueryEngine:
         )
         # clear cache to free memory
         self.inverted_index.clear_cache()
-        
+
         return SearchResults(search_results=search_results, correction=correction)

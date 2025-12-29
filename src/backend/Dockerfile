@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libstemmer-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # set workdir to where pyproject.toml is located for uv
@@ -25,5 +26,7 @@ COPY bindings/ ./bindings/
 RUN uv sync
 
 COPY . .
+
+ENV PYTHONPATH="/app/src:$PYTHONPATH"
 
 CMD ["uv", "run", "uvicorn", "api.v1.app:app", "--host", "0.0.0.0", "--port", "8000"]
