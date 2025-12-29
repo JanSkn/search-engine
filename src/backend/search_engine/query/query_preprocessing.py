@@ -38,7 +38,9 @@ class QueryTree:
     def __init__(self) -> None:
         self._root: Node | None = None
         self._warnings_stack: list[ParenthesesWarning] = []
-        self.unique_terms = set()  # only positive (non-negated) terms for snippeting
+        self.unique_terms: set[str] = (
+            set()
+        )  # only positive (non-negated) terms for snippeting
 
     @property
     def root(self) -> Node | None:
