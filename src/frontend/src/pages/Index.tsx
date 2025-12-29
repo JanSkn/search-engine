@@ -10,7 +10,7 @@ import seekrLogo from "@/assets/seekr-logo.png";
 interface SearchResult {
   title: string;
   url: string;
-  description?: string;
+  snippet?: string;
 }
 
 const Index = () => {
@@ -128,7 +128,7 @@ const Index = () => {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
+        `/search?q=${encodeURIComponent(query)}&limit=${customLimit}`
       );
 
       if (!response.ok) {
@@ -136,7 +136,7 @@ const Index = () => {
         try {
           const data = await response.json();
           if (data.detail) errorMsg = data.detail;
-        } catch {}
+        } catch { }
         throw new Error(errorMsg);
       }
 
@@ -282,11 +282,10 @@ const Index = () => {
                           key={rpp}
                           onClick={() => handleResultsPerPageChange(rpp)}
                           disabled={isLoading}
-                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                            resultsPerPage === rpp
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "border-input hover:bg-accent"
-                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${resultsPerPage === rpp
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-input hover:bg-accent"
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           {rpp}
                         </button>
@@ -371,22 +370,43 @@ const Index = () => {
 
                     {/* Pagination */}
                     {totalPages > 1 && (
-                      <div className="flex justify-center mt-8 space-x-2">
-                        {Array.from({ length: totalPages }, (_, index) => index + 1).map(
-                          (pageNum) => (
-                            <button
-                              key={pageNum}
-                              onClick={() => handlePageChange(pageNum)}
-                              className={`px-4 py-2 rounded ${
-                                pageNum === currentPage
-                                  ? "bg-primary text-white"
-                                  : "bg-input text-foreground hover:bg-accent"
+                      <div className="flex justify-center items-center mt-8 gap-2">
+                        {/* Previous Button */}
+                        <button
+                          onClick={() => handlePageChange(currentPage - 1)}
+                          disabled={currentPage === 1}
+                          className="p-2 rounded-lg border border-input hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          aria-label="Previous page"
+                        >
+                          <ChevronLeft className="h-5 w-5" />
+                        </button>
+
+                        {/* Page Numbers */}
+                        {getPageNumbers().map((pageNum, index) => (
+                          <button
+                            key={index}
+                            onClick={() => typeof pageNum === "number" && handlePageChange(pageNum)}
+                            disabled={pageNum === "..."}
+                            className={`min-w-[40px] px-3 py-2 rounded-lg transition-colors ${pageNum === currentPage
+                              ? "bg-primary text-primary-foreground font-semibold"
+                              : pageNum === "..."
+                                ? "cursor-default"
+                                : "border border-input hover:bg-accent"
                               }`}
-                            >
-                              {pageNum}
-                            </button>
-                          )
-                        )}
+                          >
+                            {pageNum}
+                          </button>
+                        ))}
+
+                        {/* Next Button */}
+                        <button
+                          onClick={() => handlePageChange(currentPage + 1)}
+                          disabled={currentPage === totalPages}
+                          className="p-2 rounded-lg border border-input hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          aria-label="Next page"
+                        >
+                          <ChevronRight className="h-5 w-5" />
+                        </button>
                       </div>
                     )}
                   </>

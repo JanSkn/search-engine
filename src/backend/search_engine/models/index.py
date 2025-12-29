@@ -5,6 +5,7 @@ class SearchResult(BaseModel):
     document_id: int
     url: HttpUrl
     title: str
+    snippet: str
 
 
 class SearchResults(BaseModel):

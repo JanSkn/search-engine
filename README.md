@@ -20,15 +20,44 @@ Seekr consists of several core subsystems working together:
 * uv
 * Node.js
 * npm
-* Docker (for containerized integration/unit tests)
+* Docker (for containerized integration/unit tests & deployment)
 * LFS (downloading ML models from GitHub)
 * CMake (building and compiling the CPP components)
 * Just (command runner)
 
 ## Entrypoints
+### Docker
 
-### Build the Index
-Before running the system, build the index with a memory limit:
+```bash
+just deploy
+```
+Automated build process. Will download the dataset and build the index if
+it does not exist yet. This preprocessing can take up to 2 hours.
+
+Afterwards, it spins up a frontend and a backend container. 
+
+- Access search engine frontend via `http://localhost:8080`.
+- API-only: `http://localhost:8000`.
+    
+    **Search Endpoint**
+
+    **GET** `/search`
+    
+    Query parameters:
+
+    | Parameter | Type   | Description                                    |
+    | --------- | ------ | ---------------------------------------------- |
+    | `q`       | string | Search query (1–50 characters)                 |
+    | `limit`   | int    | Maximum number of results (1–500, default: 10) |
+
+
+### Manual usage
+Download the dataset:
+```bash
+cd src && uv run --project backend python -m backend.search_engine.scripts.download_dataset
+```
+
+Build the index with a memory limit:
 ```bash
 just build-index <memory-limit>
 ```

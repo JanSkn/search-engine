@@ -38,6 +38,9 @@ class QueryTree:
     def __init__(self) -> None:
         self._root: Node | None = None
         self._warnings_stack: list[ParenthesesWarning] = []
+        self.unique_terms: set[str] = (
+            set()
+        )  # only positive (non-negated) terms for snippeting
 
     @property
     def root(self) -> Node | None:
@@ -103,7 +106,7 @@ class QueryTree:
         return node
 
     # handle NOT and parentheses
-    def _parse_term(self, tokens: list[str]) -> Node:
+    def _parse_term(self, tokens: list[str], negated: bool = False) -> Node:
         if not tokens:
             raise ValueError("Unexpected end of tokens while parsing term")
 
@@ -111,7 +114,7 @@ class QueryTree:
 
         if token in NOT:
             tokens.pop(0)
-            word_node = self._parse_term(tokens)
+            word_node = self._parse_term(tokens, negated=True)
             return Node(token, left=None, right=word_node)
 
         if token == "(":
@@ -136,6 +139,8 @@ class QueryTree:
 
         # leaf node/actual word
         if token not in (AND | OR | NOT):
+            if not negated:
+                self.unique_terms.add(token)
             tokens.pop(0)
             return Node(token)
 

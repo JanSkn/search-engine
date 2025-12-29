@@ -1,0 +1,21 @@
+version: "3.9"
+name: "seekr-search-engine"
+services:
+  backend:
+    build: src/backend
+    container_name: seekr-backend
+    ports:
+      - "8000:8000" # expose backend for FE-less API access
+    volumes: # bind mount large data files
+      - ./src/backend/search_engine/index/bin:/app/src/backend/search_engine/index/bin
+      - ./src/backend/search_engine/index_builder/data/msmarco-docs.tsv:/app/src/backend/search_engine/index_builder/data/msmarco-docs.tsv
+      - ./src/backend/search_engine/models/neuspell-scrnn-probwordnoise:/app/src/backend/search_engine/models/neuspell-scrnn-probwordnoise
+  frontend:
+    build: src/frontend
+    container_name: seekr-frontend
+    depends_on:
+      - backend
+    ports: 
+      - "8080:8080"
+    environment:
+      ENV: "DOCKER"

@@ -6,7 +6,7 @@ export LOG_LEVEL=DEBUG
 PIDS=()
 
 cd src
-uv run --project backend uvicorn backend.api.v1.app:app --host 127.0.0.1 --port 8000 "$@" &
+uv run --project backend --refresh uvicorn backend.api.v1.app:app --host 127.0.0.1 --port 8000 "$@" &
 PIDS+=($!)
 echo "Uvicorn server started with PID ${PIDS[0]}"
 

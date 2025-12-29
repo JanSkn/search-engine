@@ -5,4 +5,4 @@ services:
       dockerfile: tests/Dockerfile
     image: seekr-pytest-ci-env
     environment:
-      ENV: "TEST_ENV"            
+      ENV: "TEST_ENV"
