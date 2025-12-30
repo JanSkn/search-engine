@@ -66,6 +66,23 @@ std::string ensure_utf8(const std::string& s) {
     return latin1_to_utf8(s);
 }
 
+// helpers for consistent tokenization across platforms (Mac vs Windows vs Linux/Docker)
+// avoiding std::isalnum/std::isspace dependency on locale
+inline bool is_alnum_ascii(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+inline bool is_space_ascii(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+inline char to_lower_ascii(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c + ('a' - 'A');
+    }
+    return c;
+}
+
 struct SnowballStemmer {
     struct sb_stemmer* stemmer;
     SnowballStemmer() { stemmer = sb_stemmer_new("english", nullptr); }
@@ -101,14 +118,14 @@ std::vector<std::string> normalize_search_query(const std::string& text) {
     };
 
     for (char c : text) {
-        if (std::isalnum(static_cast<unsigned char>(c))) {
-            token += std::tolower(static_cast<unsigned char>(c));
+        if (is_alnum_ascii(c)) {
+            token += to_lower_ascii(c);
             token_original += c;  // keep original case
             continue;
         }
 
         // whitespace ends token
-        if (std::isspace(static_cast<unsigned char>(c))) {
+        if (is_space_ascii(c)) {
             flush_token();
             continue;
         }
@@ -429,7 +446,7 @@ std::string DocStore::load_snippet(
         }
         // --- determine word ---
         size_t word_start = i;
-        while (word_start < len && !std::isalnum(static_cast<unsigned char>(line[word_start]))) {
+        while (word_start < len && !is_alnum_ascii(line[word_start])) {
             word_start++;
         }
         std::string separator = line.substr(i, word_start - i);
@@ -438,7 +455,7 @@ std::string DocStore::load_snippet(
             break;
         }
         size_t word_end = word_start;
-        while (word_end < len && std::isalnum(static_cast<unsigned char>(line[word_end]))) {
+        while (word_end < len && is_alnum_ascii(line[word_end])) {
             word_end++;
         }
         std::string word = line.substr(word_start, word_end - word_start);
@@ -500,7 +517,7 @@ std::string DocStore::load_snippet(
     // check if there is more text after the snippets (only if we didn't stop at sentence end)
     if (!stopped_at_sentence_end && window_idx >= snippet_window_borders.size()) {
         size_t check = i;
-        while (check < len && !std::isalnum(static_cast<unsigned char>(line[check]))) check++;
+        while (check < len && !is_alnum_ascii(line[check])) check++;
         if (check < len) {
             snippet += " ...";
         }
