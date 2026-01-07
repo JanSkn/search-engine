@@ -976,6 +976,7 @@ PYBIND11_MODULE(_core, m) {
         .def(py::init<const std::vector<uint32_t>&, const std::unordered_map<uint32_t, uint32_t>&,
                       const std::unordered_map<uint32_t, std::vector<uint32_t>>&>(),
              py::arg("postings"), py::arg("term_frequencies"), py::arg("positions"))
+        .def_readonly("doc_frequency", &PostingList::doc_frequency)
         .def_readonly("postings", &PostingList::postings)
         .def_readonly("term_frequencies", &PostingList::term_frequencies)
         .def_readonly("positions", &PostingList::positions)
