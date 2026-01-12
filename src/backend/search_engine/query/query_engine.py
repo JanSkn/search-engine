@@ -19,6 +19,7 @@ from backend.logging_config import get_logger
 
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 from backend.search_engine.spell_correction.spell_correction import repl
+from backend.search_engine.scoring.bm25 import bm25_score_docs, BM25Config
 
 logger = get_logger(__name__)
 
@@ -175,10 +176,38 @@ class QueryEngine:
             f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
         )
 
-        top_n_results = result  # TODO will be done by BM25 ranking later
+        # candidates: bool/phrase search returns doc_ids in result.postings
+        candidate_doc_ids = result.postings
+
+        # score which query terms
+        # - bool queries: qt.unique_terms
+        # - AND-auto-query w/o operators: normalized_tokens
+        query_terms: list[str] = (
+            list(qt.unique_terms)
+            if getattr(qt, "unique_terms", None)
+            else list(dict.fromkeys(normalized_tokens))
+        )
+
+        metadata = self.inverted_index.metadata
+        scores = bm25_score_docs(
+            query_terms=query_terms,
+            postings_by_term=self.inverted_index.index,  # term -> PostingList
+            candidate_doc_ids=candidate_doc_ids,
+            num_docs=metadata.num_docs,
+            avgdl=metadata.avg_doc_length,
+            get_doc_length=metadata.get_doc_length,
+            cfg=BM25Config(k1=1.2, b=0.75, idf_threshold=0.0, clamp_negative_idf=True),
+        )
+
+        # sort doc_ids acc to score
+        ranked = sorted(
+            ((doc_id, scores.get(doc_id, 0.0)) for doc_id in candidate_doc_ids),
+            key=lambda x: x[1],
+            reverse=True,
+        )
 
         search_results = []
-        for doc_id in top_n_results.postings[:limit]:
+        for doc_id, score in ranked[:limit]:
             doc_data = self.inverted_index.doc_store.get(doc_id)
             if doc_data is None:
                 continue
@@ -195,6 +224,7 @@ class QueryEngine:
                     url=url,  # type: ignore[arg-type]
                     title=title,
                     snippet=snippet,
+                    score=score,
                 )
                 search_results.append(search_result)
             except Exception as e:
