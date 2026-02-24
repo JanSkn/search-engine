@@ -11,12 +11,15 @@ from cpp_utils import PostingList  # type: ignore [import-untyped]
 
 @dataclass(frozen=True)
 class BM25Config:
-    k1: float = 1.2  # how strong tf's influence is
+    k1: float = 1.2  # how strong tf influence is
     b: float = 0.75  # level of document normalization
-    # idf thresholding -> ignore terms with idf < idf_threshold
+
+    # ignore terms with idf < idf_threshold
     idf_threshold: float = 0.0
     # clamp negative idf to 0
     clamp_negative_idf: bool = True
+
+    min_terms_after_threshold: int = 1
 
 
 def bm25_idf(num_docs: int, df: int, *, clamp_negative: bool = True) -> float:
@@ -25,7 +28,6 @@ def bm25_idf(num_docs: int, df: int, *, clamp_negative: bool = True) -> float:
     """
     if num_docs <= 0:
         return 0.0
-    # df can be 0, if term unknown
     if df <= 0:
         return 0.0
 
@@ -63,11 +65,12 @@ def bm25_score_docs(
     get_doc_length: Callable[[int], int],
     cfg: BM25Config = BM25Config(),
 ) -> dict[int, float]:
-    """
-    scores only the provided candidate_doc_ids (typically: boolean result set)
-    """
-    # precompute term idf + apply thresholding
-    term_idf: dict[str, float] = {}
+    # materialize candidates once
+    cand_list = list(candidate_doc_ids)
+    cand_set = set(cand_list)
+
+    # compute idf for al query terms first
+    term_idf_all: list[tuple[str, float]] = []  # (term, idf)
     for t in query_terms:
         pl = postings_by_term.get(t)
         if pl is None:
@@ -77,40 +80,44 @@ def bm25_score_docs(
             df = len(pl.postings)
 
         idf = bm25_idf(num_docs, int(df), clamp_negative=cfg.clamp_negative_idf)
-        if idf >= cfg.idf_threshold:
-            term_idf[t] = idf
+        term_idf_all.append((t, idf))
 
-    # fallback: if thresholding removes everything, take all terms w/o threshold
-    if not term_idf:
-        for t in query_terms:
-            pl = postings_by_term.get(t)
-            if pl is None:
+    # order by decreasing idf
+    term_idf_all.sort(key=lambda x: x[1], reverse=True)
+
+    # thresholding
+    term_idf: dict[str, float] = {
+        t: idf for (t, idf) in term_idf_all if idf >= cfg.idf_threshold
+    }
+
+    # ensure keep at least n best terms
+    min_keep = max(1, int(cfg.min_terms_after_threshold))
+    if len(term_idf) < min_keep:
+        term_idf = {t: idf for (t, idf) in term_idf_all[:min_keep]}
+
+    # scoring only docs that actually appear in term postings (tf>0)
+    scores: dict[int, float] = {int(d): 0.0 for d in cand_list}
+
+    for t, idf in term_idf.items():
+        pl = postings_by_term.get(t)
+        if pl is None:
+            continue
+
+        tf_map = dict(pl.term_frequencies)
+
+        for doc_id, tf in tf_map.items():
+            doc_id = int(doc_id)
+            if doc_id not in cand_set:
                 continue
-            df = getattr(pl, "doc_frequency", None)
-            if df is None:
-                df = len(pl.postings)
-            term_idf[t] = bm25_idf(
-                num_docs, int(df), clamp_negative=cfg.clamp_negative_idf
-            )
 
-    scores: dict[int, float] = {int(d): 0.0 for d in candidate_doc_ids}
-
-    for doc_id in list(scores.keys()):
-        dl = int(get_doc_length(doc_id))
-        s = 0.0
-        for t, idf in term_idf.items():
-            pl = postings_by_term.get(t)
-            if pl is None:
-                continue
-            tf = int(pl.term_frequencies.get(doc_id, 0))
-            s += bm25_term_contribution(
-                tf=tf,
+            dl = int(get_doc_length(doc_id))
+            scores[doc_id] += bm25_term_contribution(
+                tf=int(tf),
                 doc_len=dl,
                 avgdl=avgdl,
                 idf=idf,
                 k1=cfg.k1,
                 b=cfg.b,
             )
-        scores[doc_id] = s
 
     return scores
