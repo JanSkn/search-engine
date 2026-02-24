@@ -233,6 +233,7 @@ dist-ssr
 
 *.tsv
 *.gz
+/src/backend/search_engine/models/nomic-embed-text/
 # allow test data files as they are small and necessary for tests
 !src/backend/search_engine/index_builder/test_data/*.tsv
 !src/backend/search_engine/index_builder/test_data/*.gz

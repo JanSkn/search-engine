@@ -59,12 +59,12 @@ cd src && uv run --project backend python -m backend.search_engine.scripts.downl
 
 Build the index with a memory limit:
 ```bash
-just build-index <memory-limit>
+just build-index <memory-limit> [<max-docs>]
 ```
 
 Start both frontend and backend in dev environment (`http://localhost:8080`):
 ```bash
-just local <uvicorn-args>
+just local [<uvicorn-args>]
 ```
 
 Query Search Engine from CLI:
