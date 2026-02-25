@@ -1,4 +1,5 @@
 import time
+import heapq
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.models.index import SearchResult, SearchResults
 from cpp_utils import (  # type: ignore [import-untyped]
@@ -19,6 +20,7 @@ from backend.logging_config import get_logger
 
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 from backend.search_engine.spell_correction.spell_correction import repl
+from backend.search_engine.scoring.bm25 import bm25_score_docs, BM25Config
 
 logger = get_logger(__name__)
 
@@ -175,10 +177,48 @@ class QueryEngine:
             f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
         )
 
-        top_n_results = result  # TODO will be done by BM25 ranking later
+        # candidates: bool/phrase search returns doc_ids in result.postings
+        candidate_doc_ids = list(result.postings)
+        metadata = self.inverted_index.metadata
+
+        # score which query terms
+        # - bool queries: qt.unique_terms
+        # - AND-auto-query w/o operators: normalized_tokens
+        query_terms: list[str] = (
+            list(qt.unique_terms)
+            if getattr(qt, "unique_terms", None)
+            else list(dict.fromkeys(normalized_tokens))
+        )
+
+        t_score = time.perf_counter()
+
+        scores = bm25_score_docs(
+            query_terms=query_terms,
+            postings_by_term=self.inverted_index.index,  # term -> PostingList
+            candidate_doc_ids=candidate_doc_ids,
+            num_docs=metadata.num_docs,
+            avgdl=metadata.avg_doc_length,
+            get_doc_length=metadata.get_doc_length,
+            cfg=BM25Config(k1=1.2, b=0.75, idf_threshold=0.0, clamp_negative_idf=True),
+        )
+
+        logger.debug(f"BM25 scoring time: {time.perf_counter() - t_score:.6f}s")
+
+        t_sort = time.perf_counter()
+
+        # sort doc_ids acc to score
+        ranked_top = heapq.nlargest(
+            limit,
+            ((doc_id, scores.get(doc_id, 0.0)) for doc_id in candidate_doc_ids),
+            key=lambda x: x[1],
+        )
+
+        logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort:.6f}s")
+
+        t_top = time.perf_counter()
 
         search_results = []
-        for doc_id in top_n_results.postings[:limit]:
+        for doc_id, score in ranked_top:
             doc_data = self.inverted_index.doc_store.get(doc_id)
             if doc_data is None:
                 continue
@@ -195,11 +235,16 @@ class QueryEngine:
                     url=url,  # type: ignore[arg-type]
                     title=title,
                     snippet=snippet,
+                    score=score,
                 )
                 search_results.append(search_result)
             except Exception as e:
                 logger.error(f"Error creating SearchResult for doc_id {doc_id}: {e}")
                 continue
+
+        logger.debug(
+            f"Build top-{limit} results time: {time.perf_counter() - t_top:.6f}s"
+        )
 
         end = time.perf_counter()
         logger.debug(

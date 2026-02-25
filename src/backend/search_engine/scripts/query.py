@@ -21,7 +21,7 @@ def main():
     end = time.time()
 
     for r in results.search_results:
-        print(f"[{r.document_id}] {r.title} — {r.url}")
+        print(f"[{r.document_id}] {r.title} — {r.url} — {r.score}")
 
     print(f"Total time: {end - start}s")
 
