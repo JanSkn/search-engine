@@ -1,4 +1,3 @@
-# backend/search_engine/scoring/bm25.py
 from __future__ import annotations
 
 import math
