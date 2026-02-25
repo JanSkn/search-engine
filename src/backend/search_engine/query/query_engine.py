@@ -4,6 +4,7 @@ import time
 import heapq
 from dataclasses import dataclass
 from typing import Iterable
+from stop_words import get_stop_words
 
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.models.index import SearchResult, SearchResults
@@ -32,6 +33,14 @@ from backend.search_engine.scoring.bm25 import (
 )
 
 logger = get_logger(__name__)
+stop_words = {'the', 'and', 'to', 'of', 'a', 'in', 'is', 'it', 'you', 'that', 
+                    'he', 'was', 'for', 'on', 'are', 'with', 'as', 'i', 'his', 'they', 
+                    'be', 'at', 'one', 'have', 'this', 'from', 'or', 'had', 'by', 'but',
+                    'not', 'what', 'all', 'were', 'we', 'when', 'your', 'can', 'said',
+                    'there', 'use', 'an', 'each', 'which', 'do', 'how', 'their', 'if',
+                    'will', 'up', 'other', 'about', 'out', 'many', 'then', 'them',
+                    'these', 'so', 'some', 'her', 'would', 'make', 'like', 'him',
+                    'into', 'time', 'has', 'look', 'two', 'more', 'write', 'go', 'see'}
 
 
 @dataclass(frozen=True)
@@ -54,9 +63,9 @@ class QueryEngine:
 
         self.retr_cfg = RetrievalConfig(
             max_terms_for_candidates=3,
-            max_candidates_total=50_000,
-            max_candidates_per_term=30_000,
-            idf_threshold=0.0,
+            max_candidates_total=10_000,
+            max_candidates_per_term=10_000,
+            idf_threshold=0.5,
             min_terms_after_threshold=1,
             allow_fallback_full_retrieval=True,
         )
@@ -64,10 +73,13 @@ class QueryEngine:
         self.bm25_cfg = BM25Config(
             k1=1.2,
             b=0.75,
-            idf_threshold=1.0,
-            clamp_negative_idf=True,
+            idf_threshold=0.5,
+            clamp_negative_idf=False,
             min_terms_after_threshold=1,
         )
+
+        self._df_cache: dict[str, int] = {}
+        self._idf_cache: dict[str, float] = {}
 
     @staticmethod
     def _empty_pl() -> PostingList:
@@ -94,15 +106,56 @@ class QueryEngine:
 
         return PostingList(postings=filtered_postings, term_frequencies=filtered_tf, positions=filtered_pos)
 
-    def _idf_for_term(self, term: str) -> float:
+    @staticmethod
+    def _filter_posting_list_postings_only(pl: PostingList | None, allowed: set[int]) -> PostingList:
+        if pl is None:
+            return QueryEngine._empty_pl()
+        filtered_postings = [int(d) for d in pl.postings if int(d) in allowed]
+        return PostingList(postings=filtered_postings, term_frequencies={}, positions={})
+
+    @staticmethod
+    def _bool_op_postings(left: PostingList, right: PostingList, op: str) -> PostingList:
+        lset = set(int(d) for d in left.postings)
+        rset = set(int(d) for d in right.postings)
+
+        if op == "AND":
+            out = lset & rset
+        elif op == "OR":
+            out = lset | rset
+        elif op == "NOT":
+            out = lset - rset
+        else:
+            out = set()
+
+        return PostingList(postings=sorted(out), term_frequencies={}, positions={})
+
+    def _df_for_term(self, term: str) -> int:
+        cached = self._df_cache.get(term)
+        if cached is not None:
+            return cached
         pl = self.inverted_index.index.get(term)
         if pl is None:
+            self._df_cache[term] = 0
+            return 0
+        df = getattr(pl, "doc_frequency", 0)
+        df_i = int(df)
+        self._df_cache[term] = df_i
+        return df_i
+
+    def _idf_for_term(self, term: str) -> float:
+        cached = self._idf_cache.get(term)
+        if cached is not None:
+            return cached
+
+        df = self._df_for_term(term)
+        if df <= 0:
+            self._idf_cache[term] = 0.0
             return 0.0
-        df = getattr(pl, "doc_frequency", None)
-        if df is None:
-            df = len(pl.postings)
+
         md = self.inverted_index.metadata
-        return bm25_idf(md.num_docs, int(df), clamp_negative=self.bm25_cfg.clamp_negative_idf)
+        idf = bm25_idf(md.num_docs, int(df), clamp_negative=self.bm25_cfg.clamp_negative_idf)
+        self._idf_cache[term] = float(idf)
+        return float(idf)
 
     def _select_terms_for_candidates(self, query_terms: list[str]) -> list[str]:
         # compute (term, idf) for existing terms
@@ -157,7 +210,7 @@ class QueryEngine:
 
         if node.value not in AND | OR | NOT:
             pl = self.inverted_index.index.get(node.value)
-            return self._filter_posting_list(pl, allowed)
+            return self._filter_posting_list_postings_only(pl, allowed)
 
         if node.value in AND:
             left_is_not = node.left and node.left.value in NOT
@@ -166,21 +219,21 @@ class QueryEngine:
             if left_is_not:
                 not_docs = self._bool_search_restricted(node.left.right if node.left else None, allowed)
                 right = self._bool_search_restricted(node.right, allowed)
-                return find_docs(right, not_docs, "NOT")
+                return self._bool_op_postings(right, not_docs, "NOT")
 
             if right_is_not:
                 left = self._bool_search_restricted(node.left, allowed)
                 not_docs = self._bool_search_restricted(node.right.right if node.right else None, allowed)
-                return find_docs(left, not_docs, "NOT")
+                return self._bool_op_postings(left, not_docs, "NOT")
 
             left = self._bool_search_restricted(node.left, allowed)
             right = self._bool_search_restricted(node.right, allowed)
-            return find_docs(left, right, "AND")
+            return self._bool_op_postings(left, right, "AND")
 
         # OR
         left = self._bool_search_restricted(node.left, allowed)
         right = self._bool_search_restricted(node.right, allowed)
-        return find_docs(left, right, "OR")
+        return self._bool_op_postings(left, right, "OR")
 
     def _positional_phrase_search_restricted(self, terms: list[str], allowed: set[int]) -> PostingList:
         # phrase saerch only across candidate docs
@@ -293,11 +346,29 @@ class QueryEngine:
                 raise
 
         # decide query terms for scoring/candidates
-        query_terms: list[str] = (
+        _query_terms: list[str] = (
             list(qt.unique_terms)
             if (has_ops and getattr(qt, "unique_terms", None))
             else list(dict.fromkeys(base_terms))
         )
+        query_terms = [term for term in _query_terms if term not in stop_words]
+
+        print("IDFs:")  # DEBUG
+        for t in query_terms:  # DEBUG
+            print(t, self._idf_for_term(t))  # DEBUG
+
+        
+        for t in query_terms:
+            pl = self.inverted_index.index.get(t)
+            if pl is None:
+                print("TERM", t, "-> pl=None")
+                continue
+            df_attr = getattr(pl, "doc_frequency", None)
+            try:
+                postings_len = len(pl.postings)
+            except Exception as e:
+                postings_len = f"len-error:{e}"
+            print("TERM", t, "df_attr", df_attr, "len(postings)", postings_len)
 
 
         t_cand = time.perf_counter()
