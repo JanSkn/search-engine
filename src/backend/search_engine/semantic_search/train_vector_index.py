@@ -4,9 +4,11 @@ from math import sqrt
 from pathlib import Path
 
 import faiss  # faiss-cpu
+import numpy as np
 
 from backend.logging_config import get_logger
 from backend.search_engine.index_builder.create_embeddings import (
+    EMBEDDING_PATH,
     TOTAL_DOCS,
     NumpyIndexer,
 )
@@ -15,7 +17,8 @@ logger = get_logger(__name__)
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CHECKPOINT = PROJECT_DIR / "models" / "IVFPQ.faiss"
-SAMPLE_SIZE = 50000
+vectors = np.load(EMBEDDING_PATH, mmap_mode="r")
+SAMPLE_SIZE = min(vectors.shape[0], 50_000)
 
 
 @lru_cache(maxsize=1)
