@@ -1,18 +1,19 @@
 import argparse
-from functools import lru_cache
+import os
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import torch
 from backend.logging_config import get_logger, setup_logging
+from backend.memory_tracer import trace_numpy
 from backend.search_engine.semantic_search.embedding_model import get_embedding_model
 from backend.utils import measure_time
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from tqdm import tqdm
 
 if __name__ == "__main__":
-    setup_logging(level="DEBUG")
+    setup_logging(level=os.getenv("LOG_LEVEL", "DEBUG"))
 logger = get_logger(__name__)
 
 MSMARCO_DIR = Path(__file__).resolve().parent / "data"
@@ -21,8 +22,6 @@ TARGET_DIR = Path(__file__).resolve().parent.parent / "index" / "bin"
 EMBEDDING_PATH = TARGET_DIR / "embeddings.npy"
 DOCID_PATH = TARGET_DIR / "doc_ids.npy"
 TOTAL_DOCS = 3_213_835
-NUM_WORKERS = 8
-BATCH_SIZE = 64
 
 
 class MSMarcoDataset(IterableDataset):
@@ -51,7 +50,7 @@ class MSMarcoDataset(IterableDataset):
                 [
                     pl.col("column_1").alias("docid"),
                     pl.col("column_4").alias("text"),
-                ]  # scolumn_ tarts with 1
+                ]  # column_ index starts with 1
             )
             .filter(
                 pl.col("text").is_not_null() & (pl.col("text").str.strip_chars() != "")
@@ -86,12 +85,14 @@ class MSMarcoDataset(IterableDataset):
 
 
 class NumpyIndexer:
-    def __init__(self, max_docs: int = None):
+    def __init__(
+        self, num_workers: int = 8, batch_size: int = 64, max_docs: int = None
+    ):
         self.tsv_path = TSV_PATH
         self.target_dir = TARGET_DIR
-        self.batch_size = BATCH_SIZE
-        self.num_workers = NUM_WORKERS
-        self.max_docs = max_docs if max_docs else TOTAL_DOCS
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.max_docs = max_docs if max_docs and max_docs != -1 else TOTAL_DOCS
         self.embedder = get_embedding_model()
         self.dim = self.embedder.matryoshka_dim
         self.dtype = self.embedder.embedding_dtype
@@ -141,7 +142,6 @@ class NumpyIndexer:
                 encoded_batch = {k: v.to(device) for k, v in encoded_batch.items()}
 
                 embeddings = self.embedder.embed_tokenized(encoded_batch)
-
                 end_idx = start_idx + len(docids)
                 embeddings_fp[start_idx:end_idx, :] = (
                     embeddings.cpu().float().numpy()
@@ -158,8 +158,8 @@ class NumpyIndexer:
         logger.info(f"Finished. Embeddings written to {EMBEDDING_PATH}")
 
     @classmethod
-    @lru_cache(maxsize=1)
-    def load(mmap: bool = False):
+    @trace_numpy
+    def load(cls, mmap: bool = False):
         """
         Args:
             mmap:
@@ -189,12 +189,12 @@ if __name__ == "__main__":
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--max-docs",
+        "max_docs",
         type=int,
         default=None,
     )
 
     args = parser.parse_args()
 
-    indexer = NumpyIndexer(args.max_docs)
+    indexer = NumpyIndexer(1, 32, args.max_docs)
     indexer.run()

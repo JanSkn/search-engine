@@ -1,12 +1,16 @@
 from __future__ import annotations
-import time
+
 import subprocess
+import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from dataclasses import dataclass
+
 import torch
 from neuspell import SclstmChecker  # type: ignore [import-untyped]
+
 from backend.logging_config import get_logger
+from backend.memory_tracer import trace_torch
 
 logger = get_logger(__name__)
 
@@ -38,6 +42,7 @@ class SpellCorrector:
     checker: SclstmChecker
 
     @classmethod
+    @trace_torch
     def load(cls) -> SpellCorrector:
         _ensure_model_exists()
         logger.debug("Load neuspell SCLSTM checker...")

@@ -62,3 +62,4 @@ src/backend/search_engine/index_builder/data/
 src/backend/search_engine/index/bin/
 src/backend/search_engine/models/nomic-embed-text/
 src/backend/search_engine/models/neuspell-scrnn-probwordnoise/
+src/backend/search_engine/models/IVFPQ.faiss

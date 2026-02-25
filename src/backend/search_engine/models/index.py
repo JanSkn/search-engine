@@ -6,7 +6,7 @@ class SearchResult(BaseModel):
     url: HttpUrl
     title: str
     snippet: str
-    score: float
+    rrf_score: float
 
 
 class SearchResults(BaseModel):

@@ -3,22 +3,24 @@ from functools import lru_cache
 from math import sqrt
 from pathlib import Path
 
-import faiss  # faiss-cpu
+# faiss-cpu
+import faiss  # type: ignore [import-untyped]
 import numpy as np
 
 from backend.logging_config import get_logger
 from backend.search_engine.index_builder.create_embeddings import (
     EMBEDDING_PATH,
-    TOTAL_DOCS,
     NumpyIndexer,
 )
+from backend.utils import TempOMPThreads
 
 logger = get_logger(__name__)
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CHECKPOINT = PROJECT_DIR / "models" / "IVFPQ.faiss"
 vectors = np.load(EMBEDDING_PATH, mmap_mode="r")
-SAMPLE_SIZE = min(vectors.shape[0], 50_000)
+NUM_VECTORS = vectors.shape[0]
+SAMPLE_SIZE = min(NUM_VECTORS, 50_000)
 
 
 @lru_cache(maxsize=1)
@@ -37,34 +39,35 @@ def train_or_load_ivfpq():
         logger.debug(f"Loaded in {time.perf_counter() - load_start:.6f}s")
         return index
 
-    numpy_indexer = NumpyIndexer()
-    embeddings, ids = numpy_indexer.load()
-    d = numpy_indexer.dim
-    nlist = int(sqrt(TOTAL_DOCS))  # number of clusters
-    m = 8  # sub quantizers per vector
-    bits = 8  # bits per sub quantizer
-    assert d % m == 0
+    with TempOMPThreads(1):  # macOs workaround
+        numpy_indexer = NumpyIndexer()
+        embeddings, ids = numpy_indexer.load()
+        d = numpy_indexer.dim
+        nlist = int(sqrt(NUM_VECTORS))  # number of clusters
+        m = 8  # sub quantizers per vector
+        bits = 8  # bits per sub quantizer
+        assert d % m == 0
+        quantizer = faiss.IndexFlatIP(d)
+        index = faiss.IndexIVFPQ(quantizer, d, nlist, m, bits)
+        index.nprobe = 5  # how many clusters to look into
 
-    quantizer = faiss.IndexFlatIP(d)
-    index = faiss.IndexIVFPQ(quantizer, d, nlist, m, bits)
+        logger.debug("Starting training...")
+        start = time.time()
+        index.train(embeddings[:SAMPLE_SIZE])
+        logger.debug(f"Training finished in {time.time() - start}s")
 
-    logger.debug("Starting training...")
-    start = time.time()
-    index.train(embeddings[:SAMPLE_SIZE])
-    logger.debug(f"Training finished in {time.time() - start}s")
+        logger.debug("Starting indexing...")
+        indexing_start = time.perf_counter()
+        index.add_with_ids(embeddings, ids)
+        logger.debug(
+            f"Indexing finished in {time.perf_counter() - indexing_start:.6f}s. Documents: {index.ntotal}"
+        )
 
-    logger.debug("Starting indexing...")
-    indexing_start = time.perf_counter()
-    index.add_with_ids(embeddings, ids)
-    logger.debug(
-        f"Indexing finished in {time.perf_counter() - indexing_start:.6f}s. Documents: {index.ntotal}"
-    )
+        logger.debug("Starting to persist...")
+        persisting_start = time.perf_counter()
+        faiss.write_index(index, str(CHECKPOINT))
+        logger.debug(
+            f"Persisting finished in {time.perf_counter() - persisting_start:.6f}s"
+        )
 
-    logger.debug("Starting to persist...")
-    persisting_start = time.perf_counter()
-    faiss.write_index(index, str(CHECKPOINT))
-    logger.debug(
-        f"Persisting finished in {time.perf_counter() - persisting_start:.6f}s"
-    )
-
-    return index
+        return index

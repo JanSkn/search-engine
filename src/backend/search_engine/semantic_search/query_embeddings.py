@@ -2,6 +2,7 @@ import argparse
 import time
 
 from backend.logging_config import get_logger, setup_logging
+from backend.memory_tracer import trace_torch
 from backend.search_engine.semantic_search.embedding_model import get_embedding_model
 from backend.search_engine.semantic_search.train_vector_index import train_or_load_ivfpq
 
@@ -9,22 +10,26 @@ logger = get_logger(__name__)
 
 
 class SemanticSearcher:
+    @trace_torch
     def __init__(self):
         self.model = get_embedding_model()
         self.index = train_or_load_ivfpq()
 
-    def search(self, query: str, top_n: int = 10):
-        logger.debug(f"Semantic serach for: '{query}'")
+    @trace_torch
+    def search(self, query: str, top_n):
+        logger.debug(f"Semantic search for: '{query}'")
         start = time.perf_counter()
 
-        query_vector = self.model.embed_query(query)
+        query_vector = self.model.embed_query(query).reshape(1, -1)
         scores, ids = self.index.search(query_vector, top_n)
 
+        results = list(zip(ids[0], scores[0]))
+
         logger.debug(
-            f"Search found {len(ids[0])} results in {time.perf_counter() - start:.4f}s"
+            f"Search found {len(results)} results in {time.perf_counter() - start:.4f}s"
         )
 
-        return scores[0], ids[0]
+        return results
 
 
 if __name__ == "__main__":
@@ -37,8 +42,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     searcher = SemanticSearcher()
-    scores, ids = searcher.search(args.query, top_n=args.top_n)
+    scores = searcher.search(args.query, top_n=args.top_n)
 
     print("\nSearch Results:")
-    for score, id_ in zip(scores, ids):
+    for id_, score in scores:
         print(f"ID: {id_:<10} Score: {score:.4f}")

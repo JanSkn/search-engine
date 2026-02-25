@@ -1,26 +1,28 @@
-import time
 import heapq
-from backend.search_engine.index.index_loader import get_index
-from backend.search_engine.models.index import SearchResult, SearchResults
+import time
+
 from cpp_utils import (  # type: ignore [import-untyped]
+    PostingList,
+    find_docs,
     normalize_search_query,
     positional_intersect,
-    find_docs,
-    PostingList,
 )
+
+from backend.logging_config import get_logger
+from backend.search_engine.error_handling import InvalidOperatorError
+from backend.search_engine.index.index_loader import get_index
+from backend.search_engine.models.index import SearchResult, SearchResults
 from backend.search_engine.query.query_preprocessing import (
+    AND,
+    NOT,
+    OR,
     Node,
     QueryTree,
-    AND,
-    OR,
-    NOT,
 )
-from backend.search_engine.error_handling import InvalidOperatorError
-from backend.logging_config import get_logger
-
-from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
+from backend.search_engine.scoring.bm25 import BM25Config, bm25_score_docs
+from backend.search_engine.semantic_search.query_embeddings import SemanticSearcher
 from backend.search_engine.spell_correction.spell_correction import repl
-from backend.search_engine.scoring.bm25 import bm25_score_docs, BM25Config
+from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 
 logger = get_logger(__name__)
 
@@ -30,6 +32,7 @@ class QueryEngine:
         self._query = q
         self.inverted_index = get_index()
         self.corrector = get_spell_corrector()
+        self.semantic_searcher = SemanticSearcher()
 
     def _positional_phrase_search(self, terms: list[str]) -> PostingList:
         start = time.perf_counter()
@@ -126,6 +129,24 @@ class QueryEngine:
 
         return normalize_search_query(query_str)
 
+    @staticmethod
+    def _reciprocal_rank_fusion(
+        lists: list[list[tuple[int, float]]], top_n: int, k: int
+    ) -> list[tuple[int, float]]:
+        """
+        Fuse multiple ranked lists using Reciprocal Rank Fusion (RRF).
+
+        Returns:
+            List of top_n (doc_id, combined_score) sorted by RRF score
+        """
+        rrf_scores: dict[int, float] = {}
+
+        for ranked_list in lists:
+            for rank, (doc_id, _) in enumerate(ranked_list):
+                rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1 / (k + rank + 1)
+
+        return heapq.nlargest(top_n, rrf_scores.items(), key=lambda x: x[1])
+
     def search_results(self, limit: int = 10) -> SearchResults:
         start = time.perf_counter()
         logger.debug("Starting query execution")
@@ -190,9 +211,9 @@ class QueryEngine:
             else list(dict.fromkeys(normalized_tokens))
         )
 
-        t_score = time.perf_counter()
+        t_bm25 = time.perf_counter()
 
-        scores = bm25_score_docs(
+        bm25_scores = bm25_score_docs(
             query_terms=query_terms,
             postings_by_term=self.inverted_index.index,  # term -> PostingList
             candidate_doc_ids=candidate_doc_ids,
@@ -202,23 +223,37 @@ class QueryEngine:
             cfg=BM25Config(k1=1.2, b=0.75, idf_threshold=0.0, clamp_negative_idf=True),
         )
 
-        logger.debug(f"BM25 scoring time: {time.perf_counter() - t_score:.6f}s")
+        logger.debug(f"BM25 scoring time: {time.perf_counter() - t_bm25:.6f}s")
 
-        t_sort = time.perf_counter()
+        t_sort_bm25 = time.perf_counter()
 
         # sort doc_ids acc to score
-        ranked_top = heapq.nlargest(
+        bm25_ranked_top = heapq.nlargest(
             limit,
-            ((doc_id, scores.get(doc_id, 0.0)) for doc_id in candidate_doc_ids),
+            ((doc_id, bm25_scores.get(doc_id, 0.0)) for doc_id in candidate_doc_ids),
             key=lambda x: x[1],
         )
 
-        logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort:.6f}s")
+        logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort_bm25:.6f}s")
 
-        t_top = time.perf_counter()
+        t_semantic = time.perf_counter()
+
+        semantic_scores = self.semantic_searcher.search(raw_query, limit * 2)
+        semantic_ranked_top = heapq.nlargest(
+            limit,
+            semantic_scores,
+            key=lambda x: x[1],
+        )
+        logger.debug(f"Semantic ranking time: {time.perf_counter() - t_semantic:.6f}s")
+
+        t_rrf = time.perf_counter()
+        final_top = QueryEngine._reciprocal_rank_fusion(
+            lists=[bm25_ranked_top, semantic_ranked_top], top_n=limit, k=60
+        )
+        logger.debug(f"RRF fusion time: {time.perf_counter() - t_rrf:.6f}s")
 
         search_results = []
-        for doc_id, score in ranked_top:
+        for doc_id, rrf_score in final_top:
             doc_data = self.inverted_index.doc_store.get(doc_id)
             if doc_data is None:
                 continue
@@ -235,16 +270,12 @@ class QueryEngine:
                     url=url,  # type: ignore[arg-type]
                     title=title,
                     snippet=snippet,
-                    score=score,
+                    rrf_score=rrf_score,
                 )
                 search_results.append(search_result)
             except Exception as e:
                 logger.error(f"Error creating SearchResult for doc_id {doc_id}: {e}")
                 continue
-
-        logger.debug(
-            f"Build top-{limit} results time: {time.perf_counter() - t_top:.6f}s"
-        )
 
         end = time.perf_counter()
         logger.debug(

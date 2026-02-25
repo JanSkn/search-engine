@@ -1,9 +1,27 @@
 import functools
+import os
 import time
 
 from backend.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+class TempOMPThreads:
+    """Temporarily set OMP_NUM_THREADS to a given value."""
+
+    def __init__(self, num_threads: int):
+        self.num_threads = str(num_threads)
+        self.original = os.environ.get("OMP_NUM_THREADS", None)
+
+    def __enter__(self):
+        os.environ["OMP_NUM_THREADS"] = self.num_threads
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.original is None:
+            del os.environ["OMP_NUM_THREADS"]
+        else:
+            os.environ["OMP_NUM_THREADS"] = self.original
 
 
 def measure_time(func):

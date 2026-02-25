@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from backend.logging_config import get_logger, setup_logging
+from backend.memory_tracer import LOG_FILE
 from backend.search_engine.error_handling import InvalidOperatorError
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.models.index import SearchResults
@@ -14,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = get_logger(__name__)
+
+if LOG_FILE.exists():
+    LOG_FILE.unlink()
 
 
 @asynccontextmanager
