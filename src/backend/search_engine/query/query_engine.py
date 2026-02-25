@@ -1,5 +1,10 @@
+from __future__ import annotations
+
 import time
 import heapq
+from dataclasses import dataclass
+from typing import Iterable
+
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.models.index import SearchResult, SearchResults
 from cpp_utils import (  # type: ignore [import-untyped]
@@ -20,9 +25,25 @@ from backend.logging_config import get_logger
 
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 from backend.search_engine.spell_correction.spell_correction import repl
-from backend.search_engine.scoring.bm25 import bm25_score_docs, BM25Config
+from backend.search_engine.scoring.bm25 import (
+    bm25_score_docs,
+    BM25Config,
+    bm25_idf,
+)
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class RetrievalConfig:
+    max_terms_for_candidates: int = 3              # take top-idf terms
+    max_candidates_total: int = 50_000
+    max_candidates_per_term: int = 30_000
+
+    idf_threshold: float = 0.0
+    min_terms_after_threshold: int = 1
+
+    allow_fallback_full_retrieval: bool = True
 
 
 class QueryEngine:
@@ -31,194 +52,335 @@ class QueryEngine:
         self.inverted_index = get_index()
         self.corrector = get_spell_corrector()
 
-    def _positional_phrase_search(self, terms: list[str]) -> PostingList:
-        start = time.perf_counter()
-        logger.debug(f"Performing phrase search for: {terms}")
-
-        if not terms:
-            return PostingList(postings=[], term_frequencies={}, positions={})
-
-        result = self.inverted_index.index.get(terms[0])
-
-        if result is None:
-            return PostingList(postings=[], term_frequencies={}, positions={})
-
-        # for each subsequent term, check positions
-        for i, term in enumerate(terms[1:], start=1):
-            next_pl = self.inverted_index.index.get(term)
-
-            if next_pl is None:
-                return PostingList(postings=[], term_frequencies={}, positions={})
-
-            start_positional_intersect = time.perf_counter()
-            result = positional_intersect(result, next_pl, distance=i)
-            logger.debug(
-                f"Positional intersect for term '{term}' "
-                f"with distance={i} completed in "
-                f"{time.perf_counter() - start_positional_intersect:.6f}s"
-            )
-            if len(result.postings) == 0:
-                break
-
-        end = time.perf_counter()
-        logger.debug(
-            f"Result docs: {len(result.postings)}, "
-            f"Execution time: {end - start:.6f} seconds"
+        self.retr_cfg = RetrievalConfig(
+            max_terms_for_candidates=3,
+            max_candidates_total=100_000,
+            max_candidates_per_term=60_000,
+            idf_threshold=0.0,
+            min_terms_after_threshold=1,
+            allow_fallback_full_retrieval=True,
         )
 
-        return result
+        self.bm25_cfg = BM25Config(
+            k1=1.2,
+            b=0.75,
+            idf_threshold=1.0,
+            clamp_negative_idf=True,
+            min_terms_after_threshold=1,
+        )
 
-    def _bool_search(self, node: Node | None) -> PostingList:
+    @staticmethod
+    def _empty_pl() -> PostingList:
+        return PostingList(postings=[], term_frequencies={}, positions={})
+
+    @staticmethod
+    def _filter_posting_list(pl: PostingList | None, allowed: set[int]) -> PostingList:
+        if pl is None:
+            return QueryEngine._empty_pl()
+
+        # postings: list[int]
+        filtered_postings = [int(d) for d in pl.postings if int(d) in allowed]
+
+        # term_frequencies: mapping doc_id -> tf
+        tf_src = dict(pl.term_frequencies) if getattr(pl, "term_frequencies", None) is not None else {}
+        filtered_tf = {int(d): int(tf_src[d]) for d in tf_src.keys() if int(d) in allowed}
+
+        # positions: mapping doc_id -> list[int]
+        pos_src = getattr(pl, "positions", None)
+        if pos_src:
+            filtered_pos = {int(d): pos_src[d] for d in pos_src.keys() if int(d) in allowed}
+        else:
+            filtered_pos = {}
+
+        return PostingList(postings=filtered_postings, term_frequencies=filtered_tf, positions=filtered_pos)
+
+    def _idf_for_term(self, term: str) -> float:
+        pl = self.inverted_index.index.get(term)
+        if pl is None:
+            return 0.0
+        df = getattr(pl, "doc_frequency", None)
+        if df is None:
+            df = len(pl.postings)
+        md = self.inverted_index.metadata
+        return bm25_idf(md.num_docs, int(df), clamp_negative=self.bm25_cfg.clamp_negative_idf)
+
+    def _select_terms_for_candidates(self, query_terms: list[str]) -> list[str]:
+        # compute (term, idf) for existing terms
+        term_idf = []
+        for t in query_terms:
+            if t in AND or t in OR or t in NOT:
+                continue
+            idf = self._idf_for_term(t)
+            if idf > 0.0 or self.retr_cfg.idf_threshold <= 0.0:
+                term_idf.append((t, idf))
+
+        term_idf.sort(key=lambda x: x[1], reverse=True)
+
+        # threshold
+        kept = [t for (t, idf) in term_idf if idf >= self.retr_cfg.idf_threshold]
+        if len(kept) < max(1, int(self.retr_cfg.min_terms_after_threshold)):
+            kept = [t for (t, _) in term_idf[: max(1, int(self.retr_cfg.min_terms_after_threshold))]]
+
+        return kept[: max(1, int(self.retr_cfg.max_terms_for_candidates))]
+
+    def _build_candidates_from_terms(self, terms: list[str]) -> list[int]:
         start = time.perf_counter()
-        logger.debug(f"Evaluating node: {getattr(node, 'value', None)}")
 
+        cand: set[int] = set()
+        total_cap = int(self.retr_cfg.max_candidates_total)
+        per_term_cap = int(self.retr_cfg.max_candidates_per_term)
+
+        for t in terms:
+            pl = self.inverted_index.index.get(t)
+            if pl is None:
+                continue
+
+            for d in pl.postings[:per_term_cap]:
+                cand.add(int(d))
+                if len(cand) >= total_cap:
+                    break
+            if len(cand) >= total_cap:
+                break
+
+        logger.debug(
+            f"Candidate generation using terms={terms} -> {len(cand)} candidates "
+            f"in {time.perf_counter() - start:.6f}s"
+        )
+
+        return list(cand)
+
+
+    def _bool_search_restricted(self, node: Node | None, allowed: set[int]) -> PostingList:
+       # every term leaf reduced to `allowed` candidates first -> prevents full boolean retrieval
         if node is None:
-            return PostingList(postings=[], term_frequencies={}, positions={})
+            return self._empty_pl()
 
         if node.value not in AND | OR | NOT:
             pl = self.inverted_index.index.get(node.value)
-            result = pl or PostingList(postings=[], term_frequencies={}, positions={})
+            return self._filter_posting_list(pl, allowed)
 
-        elif node.value in AND:
-            # check if one of the nodes has NOT child
+        if node.value in AND:
             left_is_not = node.left and node.left.value in NOT
             right_is_not = node.right and node.right.value in NOT
 
             if left_is_not:
-                # NOT A AND B -> B minus A
-                not_docs = self._bool_search(node.left.right if node.left else None)
-                right = self._bool_search(node.right)
-                result = find_docs(right, not_docs, "NOT")
+                not_docs = self._bool_search_restricted(node.left.right if node.left else None, allowed)
+                right = self._bool_search_restricted(node.right, allowed)
+                return find_docs(right, not_docs, "NOT")
 
-            elif right_is_not:
-                # A AND NOT B -> A minus B
-                left = self._bool_search(node.left)
-                not_docs = self._bool_search(node.right.right if node.right else None)
-                result = find_docs(left, not_docs, "NOT")
+            if right_is_not:
+                left = self._bool_search_restricted(node.left, allowed)
+                not_docs = self._bool_search_restricted(node.right.right if node.right else None, allowed)
+                return find_docs(left, not_docs, "NOT")
 
-            else:
-                # regular AND without NOT
-                left = self._bool_search(node.left)
-                right = self._bool_search(node.right)
-                result = find_docs(left, right, "AND")
+            left = self._bool_search_restricted(node.left, allowed)
+            right = self._bool_search_restricted(node.right, allowed)
+            return find_docs(left, right, "AND")
 
-        else:  # OR
-            left = self._bool_search(node.left)
-            right = self._bool_search(node.right)
-            result = find_docs(left, right, "OR")
+        # OR
+        left = self._bool_search_restricted(node.left, allowed)
+        right = self._bool_search_restricted(node.right, allowed)
+        return find_docs(left, right, "OR")
 
-        end = time.perf_counter()
-        logger.debug(
-            f"Node={node.value!r}, Result docs={len(result.postings)}, "
-            f"Execution time: {end - start:.6f} seconds"
-        )
+    def _positional_phrase_search_restricted(self, terms: list[str], allowed: set[int]) -> PostingList:
+        # phrase saerch only across candidate docs
+        if not terms:
+            return self._empty_pl()
+
+        first = self._filter_posting_list(self.inverted_index.index.get(terms[0]), allowed)
+        if len(first.postings) == 0:
+            return self._empty_pl()
+
+        result = first
+        for i, term in enumerate(terms[1:], start=1):
+            next_pl = self._filter_posting_list(self.inverted_index.index.get(term), allowed)
+            if len(next_pl.postings) == 0:
+                return self._empty_pl()
+            result = positional_intersect(result, next_pl, distance=i)
+            if len(result.postings) == 0:
+                break
+
         return result
+
+    # full retrieval (fallback only)
+    def _positional_phrase_search_full(self, terms: list[str]) -> PostingList:
+        if not terms:
+            return self._empty_pl()
+
+        result = self.inverted_index.index.get(terms[0])
+        if result is None:
+            return self._empty_pl()
+
+        for i, term in enumerate(terms[1:], start=1):
+            next_pl = self.inverted_index.index.get(term)
+            if next_pl is None:
+                return self._empty_pl()
+            result = positional_intersect(result, next_pl, distance=i)
+            if len(result.postings) == 0:
+                break
+        return result
+
+    def _bool_search_full(self, node: Node | None) -> PostingList:
+        if node is None:
+            return self._empty_pl()
+
+        if node.value not in AND | OR | NOT:
+            pl = self.inverted_index.index.get(node.value)
+            return pl or self._empty_pl()
+
+        if node.value in AND:
+            left_is_not = node.left and node.left.value in NOT
+            right_is_not = node.right and node.right.value in NOT
+
+            if left_is_not:
+                not_docs = self._bool_search_full(node.left.right if node.left else None)
+                right = self._bool_search_full(node.right)
+                return find_docs(right, not_docs, "NOT")
+
+            if right_is_not:
+                left = self._bool_search_full(node.left)
+                not_docs = self._bool_search_full(node.right.right if node.right else None)
+                return find_docs(left, not_docs, "NOT")
+
+            left = self._bool_search_full(node.left)
+            right = self._bool_search_full(node.right)
+            return find_docs(left, right, "AND")
+
+        left = self._bool_search_full(node.left)
+        right = self._bool_search_full(node.right)
+        return find_docs(left, right, "OR")
+
 
     @staticmethod
     def _to_boolean_normalized_query(tokens: list[str]) -> list[str]:
         if not tokens:
             return []
-
         query_str = tokens[0]
-
         for term in tokens[1:]:
             query_str = f"({query_str} AND {term})"
-
         return normalize_search_query(query_str)
+
 
     def search_results(self, limit: int = 10) -> SearchResults:
         start = time.perf_counter()
-        logger.debug("Starting query execution")
+        logger.debug("Starting query execution (efficient top-k)")
 
         qt = QueryTree()
         normalized_tokens = normalize_search_query(self._query)
-        logger.debug(f"Normalized search query: {normalized_tokens}")
-
         raw_query = self._query.strip()
 
         correction = repl(self.corrector, raw_query)
 
-        if not qt._has_operators(normalized_tokens):
-            self.inverted_index.doc_store.query_terms = list(
-                set(normalized_tokens)
-            )  # needed for snippets
-            if (raw_query.startswith('"') and raw_query.endswith('"')) or (
-                raw_query.startswith("'") and raw_query.endswith("'")
-            ):
-                # positional phrase search
-                logger.debug("Executing positional phrase query search...")
-                normalized_tokens_no_quots = normalize_search_query(raw_query[1:-1])
-                result = self._positional_phrase_search(normalized_tokens_no_quots)
-            else:
-                # any order -> create AND query
-                logger.debug("Executing phrase query search...")
-                and_query = QueryEngine._to_boolean_normalized_query(normalized_tokens)
-                logger.debug(f"Converted to AND query: {and_query}")
-                qt.parse_query(and_query)
-                logger.debug(f"Query tree: {qt.root}")
-                result = self._bool_search(qt.root)
-        else:
-            logger.debug("Executing bool query search...")
+        # determine query terms for scoring / candidates
+        base_terms = [t for t in normalized_tokens if t not in (AND | OR | NOT)]
+
+        # snippets need query terms
+        self.inverted_index.doc_store.query_terms = list(set(base_terms))
+
+        is_quoted_phrase = (raw_query.startswith('"') and raw_query.endswith('"')) or (
+            raw_query.startswith("'") and raw_query.endswith("'")
+        )
+
+        has_ops = qt._has_operators(normalized_tokens)
+
+        # f operators are there -> parse to get qt.unique_terms
+        if has_ops:
             try:
                 qt.parse_query(normalized_tokens)
-                self.inverted_index.doc_store.query_terms = (
-                    qt.unique_terms
-                )  # needed for snippets
-                logger.debug(f"Query tree: {qt.root}")
-                result = self._bool_search(qt.root)
+                self.inverted_index.doc_store.query_terms = qt.unique_terms
             except InvalidOperatorError as e:
                 logger.error(f"Invalid query syntax: {e}")
                 raise
 
-        if result is None or len(result.postings) == 0:
-            return SearchResults(search_results=[], correction=correction)
-
-        logger.debug(
-            f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
-        )
-
-        # candidates: bool/phrase search returns doc_ids in result.postings
-        candidate_doc_ids = list(result.postings)
-        metadata = self.inverted_index.metadata
-
-        # score which query terms
-        # - bool queries: qt.unique_terms
-        # - AND-auto-query w/o operators: normalized_tokens
+        # decide query terms for scoring/candidates
         query_terms: list[str] = (
             list(qt.unique_terms)
-            if getattr(qt, "unique_terms", None)
-            else list(dict.fromkeys(normalized_tokens))
+            if (has_ops and getattr(qt, "unique_terms", None))
+            else list(dict.fromkeys(base_terms))
         )
 
+
+        t_cand = time.perf_counter()
+        cand_terms = self._select_terms_for_candidates(query_terms)
+        candidate_doc_ids = self._build_candidates_from_terms(cand_terms)
+        cand_set = set(candidate_doc_ids)
+        logger.debug(f"Candidate phase time: {time.perf_counter() - t_cand:.6f}s")
+
+        # if no candidates at all -> exit or fallback
+        if not candidate_doc_ids and not self.retr_cfg.allow_fallback_full_retrieval:
+            return SearchResults(search_results=[], correction=correction)
+
+
+        t_filter = time.perf_counter()
+        restricted_result: PostingList
+
+        if is_quoted_phrase:
+            phrase_terms = normalize_search_query(raw_query[1:-1])
+            restricted_result = self._positional_phrase_search_restricted(phrase_terms, cand_set)
+        elif has_ops:
+            restricted_result = self._bool_search_restricted(qt.root, cand_set)
+        else:
+            # no operators: dont build full AND boolean over all docs
+            and_query = self._to_boolean_normalized_query(query_terms)
+            qt2 = QueryTree()
+            qt2.parse_query(and_query)
+            restricted_result = self._bool_search_restricted(qt2.root, cand_set)
+
+        logger.debug(f"Restricted filter time: {time.perf_counter() - t_filter:.6f}s")
+
+        logger.debug(f"restricted pre-fallback hits={len(restricted_result.postings)}")
+        # if too few hits -> fall back to full retrieval
+        if (restricted_result is None or len(restricted_result.postings) == 0) and self.retr_cfg.allow_fallback_full_retrieval:
+            logger.debug("Restricted phase returned 0 hits; running fallback full retrieval")
+
+            if is_quoted_phrase:
+                phrase_terms = normalize_search_query(raw_query[1:-1])
+                restricted_result = self._positional_phrase_search_full(phrase_terms)
+            elif has_ops:
+                restricted_result = self._bool_search_full(qt.root)
+            else:
+                and_query = self._to_boolean_normalized_query(query_terms)
+                qt3 = QueryTree()
+                qt3.parse_query(and_query)
+                restricted_result = self._bool_search_full(qt3.root)
+        
+        logger.debug(f"restricted post-fallback hits={len(restricted_result.postings)}")
+
+        if restricted_result is None or len(restricted_result.postings) == 0:
+            self.inverted_index.clear_cache()
+            return SearchResults(search_results=[], correction=correction)
+
         t_score = time.perf_counter()
+        metadata = self.inverted_index.metadata
+
+        final_candidate_doc_ids = list(restricted_result.postings)
 
         scores = bm25_score_docs(
             query_terms=query_terms,
-            postings_by_term=self.inverted_index.index,  # term -> PostingList
-            candidate_doc_ids=candidate_doc_ids,
+            postings_by_term=self.inverted_index.index,
+            candidate_doc_ids=final_candidate_doc_ids,
             num_docs=metadata.num_docs,
             avgdl=metadata.avg_doc_length,
             get_doc_length=metadata.get_doc_length,
-            cfg=BM25Config(k1=1.2, b=0.75, idf_threshold=0.0, clamp_negative_idf=True),
+            cfg=self.bm25_cfg,
         )
-
         logger.debug(f"BM25 scoring time: {time.perf_counter() - t_score:.6f}s")
 
-        t_sort = time.perf_counter()
 
-        # sort doc_ids acc to score
+        # top k selection
+        t_sort = time.perf_counter()
         ranked_top = heapq.nlargest(
             limit,
-            ((doc_id, scores.get(doc_id, 0.0)) for doc_id in candidate_doc_ids),
+            ((doc_id, scores.get(int(doc_id), 0.0)) for doc_id in final_candidate_doc_ids),
             key=lambda x: x[1],
         )
-
         logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort:.6f}s")
 
         t_top = time.perf_counter()
+        search_results: list[SearchResult] = []
 
-        search_results = []
         for doc_id, score in ranked_top:
+            doc_id = int(doc_id)
             doc_data = self.inverted_index.doc_store.get(doc_id)
             if doc_data is None:
                 continue
@@ -226,32 +388,28 @@ class QueryEngine:
             url = doc_data.url
             if url is None:
                 continue
+
             title = doc_data.title or "Untitled"
             snippet = doc_data.snippet
 
             try:
-                search_result = SearchResult(
-                    document_id=doc_id,
-                    url=url,  # type: ignore[arg-type]
-                    title=title,
-                    snippet=snippet,
-                    score=score,
+                search_results.append(
+                    SearchResult(
+                        document_id=doc_id,
+                        url=url,  # type: ignore[arg-type]
+                        title=title,
+                        snippet=snippet,
+                        score=float(score),
+                    )
                 )
-                search_results.append(search_result)
             except Exception as e:
                 logger.error(f"Error creating SearchResult for doc_id {doc_id}: {e}")
-                continue
+
+        logger.debug(f"Build top-{limit} results time: {time.perf_counter() - t_top:.6f}s")
 
         logger.debug(
-            f"Build top-{limit} results time: {time.perf_counter() - t_top:.6f}s"
+            f"Returned {len(search_results)} results. Total time: {time.perf_counter() - start:.6f}s"
         )
 
-        end = time.perf_counter()
-        logger.debug(
-            f"Returned {len(search_results)} results. "
-            f"Total execution time: {end - start:.6f} seconds"
-        )
-        # clear cache to free memory
         self.inverted_index.clear_cache()
-
         return SearchResults(search_results=search_results, correction=correction)
