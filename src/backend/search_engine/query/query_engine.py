@@ -54,8 +54,8 @@ class QueryEngine:
 
         self.retr_cfg = RetrievalConfig(
             max_terms_for_candidates=3,
-            max_candidates_total=100_000,
-            max_candidates_per_term=60_000,
+            max_candidates_total=50_000,
+            max_candidates_per_term=30_000,
             idf_threshold=0.0,
             min_terms_after_threshold=1,
             allow_fallback_full_retrieval=True,
