@@ -319,75 +319,75 @@ class QueryEngine:
         logger.debug("Starting query execution (efficient top-k)")
 
         qt = QueryTree()
-        t_norm = time.perf_counter()  # ADDED
+        t_norm = time.perf_counter()
         normalized_tokens = normalize_search_query(self._query)
-        logger.debug(f"normalize_search_query time: {time.perf_counter() - t_norm:.6f}s")  # ADDED
+        logger.debug(f"normalize_search_query time: {time.perf_counter() - t_norm:.6f}s")
         raw_query = self._query.strip()
 
-        t_corr = time.perf_counter()  # ADDED
+        t_corr = time.perf_counter()
         correction = repl(self.corrector, raw_query)
-        logger.debug(f"spell correction total time: {time.perf_counter() - t_corr:.6f}s")  # ADDED
+        logger.debug(f"spell correction total time: {time.perf_counter() - t_corr:.6f}s")
 
         # determine query terms for scoring / candidates
-        t_base = time.perf_counter()  # ADDED
+        t_base = time.perf_counter()
         base_terms = [t for t in normalized_tokens if t not in (AND | OR | NOT)]
-        logger.debug(f"base_terms build time: {time.perf_counter() - t_base:.6f}s")  # ADDED
+        logger.debug(f"base_terms build time: {time.perf_counter() - t_base:.6f}s")
 
-        t_set_qt = time.perf_counter()  # ADDED
+        t_set_qt = time.perf_counter()
         self.inverted_index.doc_store.query_terms = list(set(base_terms))
-        logger.debug(f"set doc_store.query_terms (base) time: {time.perf_counter() - t_set_qt:.6f}s")  # ADDED
+        logger.debug(f"set doc_store.query_terms (base) time: {time.perf_counter() - t_set_qt:.6f}s")
 
-        t_flags = time.perf_counter()  # ADDED
+        t_flags = time.perf_counter()
         is_quoted_phrase = (raw_query.startswith('\"') and raw_query.endswith('\"')) or (
             raw_query.startswith("'") and raw_query.endswith("'")
         )
-        logger.debug(f"quoted phrase check time: {time.perf_counter() - t_flags:.6f}s")  # ADDED
+        logger.debug(f"quoted phrase check time: {time.perf_counter() - t_flags:.6f}s")
 
-        t_has_ops = time.perf_counter()  # ADDED
+        t_has_ops = time.perf_counter()
         has_ops = qt._has_operators(normalized_tokens)
-        logger.debug(f"_has_operators time: {time.perf_counter() - t_has_ops:.6f}s")  # ADDED
+        logger.debug(f"_has_operators time: {time.perf_counter() - t_has_ops:.6f}s")
 
         if has_ops:
             try:
-                t_parse_ops = time.perf_counter()  # ADDED
+                t_parse_ops = time.perf_counter()
                 qt.parse_query(normalized_tokens)
-                logger.debug(f"parse_query (ops) time: {time.perf_counter() - t_parse_ops:.6f}s")  # ADDED
-                t_set_qt2 = time.perf_counter()  # ADDED
+                logger.debug(f"parse_query (ops) time: {time.perf_counter() - t_parse_ops:.6f}s")
+                t_set_qt2 = time.perf_counter()
                 self.inverted_index.doc_store.query_terms = qt.unique_terms
-                logger.debug(f"set doc_store.query_terms (ops) time: {time.perf_counter() - t_set_qt2:.6f}s")  # ADDED
+                logger.debug(f"set doc_store.query_terms (ops) time: {time.perf_counter() - t_set_qt2:.6f}s")
             except InvalidOperatorError as e:
                 logger.error(f"Invalid query syntax: {e}")
                 raise
 
-        t_qterms = time.perf_counter()  # ADDED
+        t_qterms = time.perf_counter()
         _query_terms: list[str] = (
             list(qt.unique_terms)
             if (has_ops and getattr(qt, "unique_terms", None))
             else list(dict.fromkeys(base_terms))
         )
-        logger.debug(f"_query_terms build time: {time.perf_counter() - t_qterms:.6f}s")  # ADDED
+        logger.debug(f"_query_terms build time: {time.perf_counter() - t_qterms:.6f}s")
 
-        t_filter_terms = time.perf_counter()  # ADDED
+        t_filter_terms = time.perf_counter()
         query_terms = [term for term in _query_terms if term not in stop_words]
-        logger.debug(f"stop_words filter time: {time.perf_counter() - t_filter_terms:.6f}s")  # ADDED
+        logger.debug(f"stop_words filter time: {time.perf_counter() - t_filter_terms:.6f}s")
 
-        logger.debug(f"query_terms (filtered) count={len(query_terms)} terms={query_terms}")  # ADDED
+        logger.debug(f"query_terms (filtered) count={len(query_terms)} terms={query_terms}")
 
-        t_select = time.perf_counter()  # ADDED
+        t_select = time.perf_counter()
         cand_terms = self._select_terms_for_candidates(query_terms)
-        logger.debug(f"select_terms_for_candidates time: {time.perf_counter() - t_select:.6f}s terms={cand_terms}")  # ADDED
+        logger.debug(f"select_terms_for_candidates time: {time.perf_counter() - t_select:.6f}s terms={cand_terms}")
 
         t_cand = time.perf_counter()
         candidate_doc_ids = self._build_candidates_from_terms(cand_terms)
-        t_set_cand = time.perf_counter()  # ADDED
+        t_set_cand = time.perf_counter()
         cand_set = set(candidate_doc_ids)
-        logger.debug(f"cand_set build time: {time.perf_counter() - t_set_cand:.6f}s")  # ADDED
+        logger.debug(f"cand_set build time: {time.perf_counter() - t_set_cand:.6f}s")
         logger.debug(f"Candidate phase time: {time.perf_counter() - t_cand:.6f}s")
 
-        logger.debug(f"candidate_doc_ids count={len(candidate_doc_ids)}")  # ADDED
+        logger.debug(f"candidate_doc_ids count={len(candidate_doc_ids)}")
 
         if not candidate_doc_ids and not self.retr_cfg.allow_fallback_full_retrieval:
-            logger.debug("No candidates and fallback disabled -> returning empty results")  # ADDED
+            logger.debug("No candidates and fallback disabled -> returning empty results")
             return SearchResults(search_results=[], correction=correction)
 
 
@@ -395,25 +395,25 @@ class QueryEngine:
         restricted_result: PostingList
 
         if is_quoted_phrase:
-            t_phrase_norm = time.perf_counter()  # ADDED
+            t_phrase_norm = time.perf_counter()
             phrase_terms = normalize_search_query(raw_query[1:-1])
-            logger.debug(f"normalize_search_query (phrase) time: {time.perf_counter() - t_phrase_norm:.6f}s")  # ADDED
+            logger.debug(f"normalize_search_query (phrase) time: {time.perf_counter() - t_phrase_norm:.6f}s")
             restricted_result = self._positional_phrase_search_restricted(phrase_terms, cand_set)
         elif has_ops:
             restricted_result = self._bool_search_restricted(qt.root, cand_set)
         else:
-            t_and_build = time.perf_counter()  # ADDED
+            t_and_build = time.perf_counter()
             and_query = self._to_boolean_normalized_query(query_terms)
-            logger.debug(f"_to_boolean_normalized_query time: {time.perf_counter() - t_and_build:.6f}s")  # ADDED
+            logger.debug(f"_to_boolean_normalized_query time: {time.perf_counter() - t_and_build:.6f}s")
 
             qt2 = QueryTree()
-            t_parse_no_ops = time.perf_counter()  # ADDED
+            t_parse_no_ops = time.perf_counter()
             qt2.parse_query(and_query)
-            logger.debug(f"parse_query (no ops) time: {time.perf_counter() - t_parse_no_ops:.6f}s")  # ADDED
+            logger.debug(f"parse_query (no ops) time: {time.perf_counter() - t_parse_no_ops:.6f}s")
 
-            t_bool_restricted = time.perf_counter()  # ADDED
+            t_bool_restricted = time.perf_counter()
             restricted_result = self._bool_search_restricted(qt2.root, cand_set)
-            logger.debug(f"_bool_search_restricted time: {time.perf_counter() - t_bool_restricted:.6f}s")  # ADDED
+            logger.debug(f"_bool_search_restricted time: {time.perf_counter() - t_bool_restricted:.6f}s")
 
         logger.debug(f"Restricted filter time: {time.perf_counter() - t_filter:.6f}s")
 
@@ -421,22 +421,22 @@ class QueryEngine:
         if (restricted_result is None or len(restricted_result.postings) == 0) and self.retr_cfg.allow_fallback_full_retrieval:
             logger.debug("Restricted phase returned 0 hits; running fallback full retrieval")
 
-            t_fallback = time.perf_counter()  # ADDED
+            t_fallback = time.perf_counter()
             if is_quoted_phrase:
-                t_phrase_norm2 = time.perf_counter()  # ADDED
+                t_phrase_norm2 = time.perf_counter()
                 phrase_terms = normalize_search_query(raw_query[1:-1])
-                logger.debug(f"normalize_search_query (phrase, fallback) time: {time.perf_counter() - t_phrase_norm2:.6f}s")  # ADDED
+                logger.debug(f"normalize_search_query (phrase, fallback) time: {time.perf_counter() - t_phrase_norm2:.6f}s")
                 restricted_result = self._positional_phrase_search_full(phrase_terms)
             elif has_ops:
                 restricted_result = self._bool_search_full(qt.root)
             else:
                 and_query = self._to_boolean_normalized_query(query_terms)
                 qt3 = QueryTree()
-                t_parse_no_ops2 = time.perf_counter()  # ADDED
+                t_parse_no_ops2 = time.perf_counter()
                 qt3.parse_query(and_query)
-                logger.debug(f"parse_query (no ops, fallback) time: {time.perf_counter() - t_parse_no_ops2:.6f}s")  # ADDED
+                logger.debug(f"parse_query (no ops, fallback) time: {time.perf_counter() - t_parse_no_ops2:.6f}s")
                 restricted_result = self._bool_search_full(qt3.root)
-            logger.debug(f"fallback retrieval time: {time.perf_counter() - t_fallback:.6f}s")  # ADDED
+            logger.debug(f"fallback retrieval time: {time.perf_counter() - t_fallback:.6f}s")
 
         #logger.debug(f"restricted post-fallback hits={len(restricted_result.postings)}")
 
@@ -447,9 +447,9 @@ class QueryEngine:
         t_score = time.perf_counter()
         metadata = self.inverted_index.metadata
 
-        t_final_ids = time.perf_counter()  # ADDED
+        t_final_ids = time.perf_counter()
         final_candidate_doc_ids = list(restricted_result.postings)
-        logger.debug(f"final_candidate_doc_ids build time: {time.perf_counter() - t_final_ids:.6f}s")  # ADDED
+        logger.debug(f"final_candidate_doc_ids build time: {time.perf_counter() - t_final_ids:.6f}s")
 
         scores = bm25_score_docs(
             query_terms=query_terms,
@@ -474,7 +474,7 @@ class QueryEngine:
         t_top = time.perf_counter()
         search_results: list[SearchResult] = []
 
-        t_docstore = time.perf_counter()  # ADDED
+        t_docstore = time.perf_counter()
         for doc_id, score in ranked_top:
             doc_id = int(doc_id)
             doc_data = self.inverted_index.doc_store.get(doc_id)
@@ -500,7 +500,7 @@ class QueryEngine:
                 )
             except Exception as e:
                 logger.error(f"Error creating SearchResult for doc_id {doc_id}: {e}")
-        logger.debug(f"doc_store.get + SearchResult build time: {time.perf_counter() - t_docstore:.6f}s")  # ADDED
+        logger.debug(f"doc_store.get + SearchResult build time: {time.perf_counter() - t_docstore:.6f}s")
 
         logger.debug(f"Build top-{limit} results time: {time.perf_counter() - t_top:.6f}s")
 
