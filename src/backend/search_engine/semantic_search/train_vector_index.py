@@ -5,11 +5,10 @@ from pathlib import Path
 
 # faiss-cpu
 import faiss  # type: ignore [import-untyped]
-import numpy as np
 
 from backend.logging_config import get_logger
+from backend.memory_tracer import trace_memory
 from backend.search_engine.index_builder.create_embeddings import (
-    EMBEDDING_PATH,
     NumpyIndexer,
 )
 from backend.utils import TempOMPThreads
@@ -18,12 +17,11 @@ logger = get_logger(__name__)
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CHECKPOINT = PROJECT_DIR / "models" / "IVFPQ.faiss"
-vectors = np.load(EMBEDDING_PATH, mmap_mode="r")
-NUM_VECTORS = vectors.shape[0]
-SAMPLE_SIZE = min(NUM_VECTORS, 50_000)
+MIN_POINTS_PER_CENTROID = 39
 
 
 @lru_cache(maxsize=1)
+@trace_memory
 def train_or_load_ivfpq():
     """
     Trains index if not trained yet, stores and returns it.
@@ -43,7 +41,9 @@ def train_or_load_ivfpq():
         numpy_indexer = NumpyIndexer()
         embeddings, ids = numpy_indexer.load()
         d = numpy_indexer.dim
-        nlist = int(sqrt(NUM_VECTORS))  # number of clusters
+        num_vectors = embeddings.shape[0]
+        nlist = int(sqrt(num_vectors))  # number of clusters
+        sample_size = min(num_vectors, max(MIN_POINTS_PER_CENTROID * nlist, nlist))
         m = 8  # sub quantizers per vector
         bits = 8  # bits per sub quantizer
         assert d % m == 0
@@ -51,9 +51,12 @@ def train_or_load_ivfpq():
         index = faiss.IndexIVFPQ(quantizer, d, nlist, m, bits)
         index.nprobe = 5  # how many clusters to look into
 
-        logger.debug("Starting training...")
+        logger.debug(
+            f"Training with {sample_size} points for {nlist} centroids "
+            f"({sample_size / nlist:.0f} points/centroid)"
+        )
         start = time.time()
-        index.train(embeddings[:SAMPLE_SIZE])
+        index.train(embeddings[:sample_size])
         logger.debug(f"Training finished in {time.time() - start}s")
 
         logger.debug("Starting indexing...")

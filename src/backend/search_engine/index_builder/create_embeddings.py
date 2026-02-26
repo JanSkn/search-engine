@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import argparse
 import os
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import polars as pl
 import torch
 from backend.logging_config import get_logger, setup_logging
-from backend.memory_tracer import trace_numpy
+from backend.memory_tracer import trace_memory
 from backend.search_engine.semantic_search.embedding_model import get_embedding_model
 from backend.utils import measure_time
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
@@ -86,7 +89,7 @@ class MSMarcoDataset(IterableDataset):
 
 class NumpyIndexer:
     def __init__(
-        self, num_workers: int = 8, batch_size: int = 64, max_docs: int = None
+        self, num_workers: int = 8, batch_size: int = 64, max_docs: int | None = None
     ):
         self.tsv_path = TSV_PATH
         self.target_dir = TARGET_DIR
@@ -158,7 +161,7 @@ class NumpyIndexer:
         logger.info(f"Finished. Embeddings written to {EMBEDDING_PATH}")
 
     @classmethod
-    @trace_numpy
+    @trace_memory
     def load(cls, mmap: bool = False):
         """
         Args:
@@ -172,7 +175,7 @@ class NumpyIndexer:
                 "Run `just build-index` to create them first."
             )
 
-        mode = "r" if mmap else None
+        mode: Literal["r+", "r", "w+", "c"] | None = "r" if mmap else None
 
         embeddings = np.load(EMBEDDING_PATH, mmap_mode=mode)
         ids = np.load(DOCID_PATH, mmap_mode=mode)

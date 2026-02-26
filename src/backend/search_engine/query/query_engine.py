@@ -191,50 +191,60 @@ class QueryEngine:
                 logger.error(f"Invalid query syntax: {e}")
                 raise
 
-        if result is None or len(result.postings) == 0:
-            return SearchResults(search_results=[], correction=correction)
+        has_boolean_results = result is not None and len(result.postings) > 0
 
-        logger.debug(
-            f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
-        )
+        if has_boolean_results:
+            logger.debug(
+                f"Found {len(result.postings)} results in {time.perf_counter() - start:.6f} seconds"
+            )
 
-        # candidates: bool/phrase search returns doc_ids in result.postings
-        candidate_doc_ids = list(result.postings)
-        metadata = self.inverted_index.metadata
+            # candidates: bool/phrase search returns doc_ids in result.postings
+            candidate_doc_ids = list(result.postings)
+            metadata = self.inverted_index.metadata
 
-        # score which query terms
-        # - bool queries: qt.unique_terms
-        # - AND-auto-query w/o operators: normalized_tokens
-        query_terms: list[str] = (
-            list(qt.unique_terms)
-            if getattr(qt, "unique_terms", None)
-            else list(dict.fromkeys(normalized_tokens))
-        )
+            # score which query terms
+            # - bool queries: qt.unique_terms
+            # - AND-auto-query w/o operators: normalized_tokens
+            query_terms: list[str] = (
+                list(qt.unique_terms)
+                if getattr(qt, "unique_terms", None)
+                else list(dict.fromkeys(normalized_tokens))
+            )
 
-        t_bm25 = time.perf_counter()
+            t_bm25 = time.perf_counter()
 
-        bm25_scores = bm25_score_docs(
-            query_terms=query_terms,
-            postings_by_term=self.inverted_index.index,  # term -> PostingList
-            candidate_doc_ids=candidate_doc_ids,
-            num_docs=metadata.num_docs,
-            avgdl=metadata.avg_doc_length,
-            get_doc_length=metadata.get_doc_length,
-            cfg=BM25Config(k1=1.2, b=0.75, idf_threshold=0.0, clamp_negative_idf=True),
-        )
+            bm25_scores = bm25_score_docs(
+                query_terms=query_terms,
+                postings_by_term=self.inverted_index.index,  # term -> PostingList
+                candidate_doc_ids=candidate_doc_ids,
+                num_docs=metadata.num_docs,
+                avgdl=metadata.avg_body_length,
+                get_doc_length=metadata.get_doc_length,
+                cfg=BM25Config(
+                    k1=1.2, b=0.75, idf_threshold=0.0, clamp_negative_idf=True
+                ),
+            )
 
-        logger.debug(f"BM25 scoring time: {time.perf_counter() - t_bm25:.6f}s")
+            logger.debug(f"BM25 scoring time: {time.perf_counter() - t_bm25:.6f}s")
 
-        t_sort_bm25 = time.perf_counter()
+            t_sort_bm25 = time.perf_counter()
 
-        # sort doc_ids acc to score
-        bm25_ranked_top = heapq.nlargest(
-            limit,
-            ((doc_id, bm25_scores.get(doc_id, 0.0)) for doc_id in candidate_doc_ids),
-            key=lambda x: x[1],
-        )
+            # sort doc_ids acc to score
+            bm25_ranked_top = heapq.nlargest(
+                limit,
+                (
+                    (doc_id, bm25_scores.get(doc_id, 0.0))
+                    for doc_id in candidate_doc_ids
+                ),
+                key=lambda x: x[1],
+            )
 
-        logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort_bm25:.6f}s")
+            logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort_bm25:.6f}s")
+        else:
+            logger.debug(
+                "No boolean results found, falling back to semantic search only"
+            )
+            bm25_ranked_top = []
 
         t_semantic = time.perf_counter()
 
@@ -246,9 +256,13 @@ class QueryEngine:
         )
         logger.debug(f"Semantic ranking time: {time.perf_counter() - t_semantic:.6f}s")
 
+        ranked_lists = [semantic_ranked_top]
+        if bm25_ranked_top:
+            ranked_lists.append(bm25_ranked_top)
+
         t_rrf = time.perf_counter()
         final_top = QueryEngine._reciprocal_rank_fusion(
-            lists=[bm25_ranked_top, semantic_ranked_top], top_n=limit, k=60
+            lists=ranked_lists, top_n=limit, k=60
         )
         logger.debug(f"RRF fusion time: {time.perf_counter() - t_rrf:.6f}s")
 

@@ -21,7 +21,6 @@ Seekr consists of several core subsystems working together:
 * Node.js
 * npm
 * Docker (for containerized integration/unit tests & deployment)
-* LFS (downloading ML models from GitHub)
 * CMake (building and compiling the CPP components)
 * Just (command runner)
 

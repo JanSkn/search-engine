@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -11,13 +12,14 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
 from backend.logging_config import get_logger
+from backend.memory_tracer import trace_memory
 
 logger = get_logger(__name__)
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR = PROJECT_DIR / "models" / "nomic-embed-text"
 CACHE_DIR = CACHE_DIR.resolve()
-MAX_QUERY_LENGTH = 50
+MAX_QUERY_LENGTH = 100
 
 
 @dataclass
@@ -31,7 +33,7 @@ class EmbeddingModel:
         if torch.backends.mps.is_built()
         else torch.device("cpu")
     )
-    embedding_dtype: np.dtype = np.float32
+    embedding_dtype: np.dtype[np.floating[Any]] = np.dtype(np.float32)
     matryoshka_dim: int = 64
 
     @classmethod
@@ -59,14 +61,14 @@ class EmbeddingModel:
     ) -> np.ndarray:
         prefixed = "search_query: " + q
 
-        encoded = self.tokenizer(
+        encoded = self.tokenizer(  # type: ignore [operator]
             prefixed,
             max_length=MAX_QUERY_LENGTH,
             return_tensors="pt",
         ).to(self.device)
 
         with torch.no_grad():
-            output = self.model(**encoded)
+            output = self.model(**encoded)  # type: ignore [operator]
 
             embeddings = self._mean_pool(
                 output.last_hidden_state, encoded["attention_mask"]
@@ -81,12 +83,14 @@ class EmbeddingModel:
 
         return embeddings.squeeze(0).cpu().numpy()
 
-    def embed_tokenized(self, encoded: dict[str, torch.Tensor]) -> np.ndarray:
+    def embed_tokenized(
+        self, encoded: dict[str, torch.Tensor]
+    ) -> np.ndarray | torch.Tensor:
         # ensure tensors are on the correct device
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
 
         with torch.no_grad():
-            output = self.model(**encoded)
+            output = self.model(**encoded)  # type: ignore [operator]
             embeddings = self._mean_pool(
                 output.last_hidden_state, encoded["attention_mask"]
             )
@@ -116,5 +120,6 @@ class EmbeddingModel:
 
 
 @lru_cache(maxsize=1)
+@trace_memory
 def get_embedding_model() -> EmbeddingModel:
     return EmbeddingModel.load()

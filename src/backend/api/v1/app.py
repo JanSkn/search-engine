@@ -8,7 +8,11 @@ from backend.search_engine.error_handling import InvalidOperatorError
 from backend.search_engine.index.index_loader import get_index
 from backend.search_engine.models.index import SearchResults
 from backend.search_engine.query.query_engine import QueryEngine
-from backend.search_engine.semantic_search.embedding_model import MAX_QUERY_LENGTH
+from backend.search_engine.semantic_search.embedding_model import (
+    MAX_QUERY_LENGTH,
+    get_embedding_model,
+)
+from backend.search_engine.semantic_search.train_vector_index import train_or_load_ivfpq
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,11 +24,14 @@ if LOG_FILE.exists():
     LOG_FILE.unlink()
 
 
+# preload all large models at the beginning
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.debug("Starting up...")
     app.state.inverted_index = get_index()
     app.state.spell_corrector = get_spell_corrector()
+    app.state.embedding_model = get_embedding_model()
+    app.state.vector_index = train_or_load_ivfpq()
     yield
     logger.debug("Shutting down...")
 
