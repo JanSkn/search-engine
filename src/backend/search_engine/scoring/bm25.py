@@ -15,7 +15,7 @@ class BM25Config:
     b: float = 0.75  # level of document normalization
 
     # ignore terms with idf < idf_threshold
-    idf_threshold: float = 0.0
+    idf_threshold: float = 0.5
     # clamp negative idf to 0
     clamp_negative_idf: bool = True
 
