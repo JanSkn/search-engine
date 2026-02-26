@@ -5,6 +5,7 @@ interface SearchResult {
   title: string;
   url: string;
   snippet?: string;
+  rrf_score?: number;
 }
 
 interface SearchResultsProps {
@@ -41,6 +42,15 @@ export const SearchResults = ({ results }: SearchResultsProps) => {
                   <p className="text-foreground line-clamp-2">
                     <span dangerouslySetInnerHTML={{ __html: result.snippet || "" }} />
                   </p>
+                )}
+                {(result.rrf_score !== undefined) && (
+                  <div className="flex gap-2 mt-2">
+                    {result.rrf_score !== undefined && (
+                      <span className="px-2 py-1 text-xs rounded bg-blue-100 text-blue-700">
+                        RRF {Number(result.rrf_score).toFixed(3)}
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
               <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-1 group-hover:text-primary transition-colors" />

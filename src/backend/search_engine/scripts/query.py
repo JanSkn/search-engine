@@ -1,7 +1,8 @@
-import time
 import argparse
-from backend.search_engine.query.query_engine import QueryEngine
+import time
+
 from backend.logging_config import setup_logging
+from backend.search_engine.query.query_engine import QueryEngine
 
 setup_logging(level="DEBUG")
 
@@ -21,7 +22,7 @@ def main():
     end = time.time()
 
     for r in results.search_results:
-        print(f"[{r.document_id}] {r.title} — {r.url} — {r.score}")
+        print(f"[{r.document_id}] {r.title} — {r.url} — {r.bm25_score}")
 
     print(f"Total time: {end - start}s")
 

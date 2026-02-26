@@ -147,8 +147,10 @@ std::vector<std::string> normalize_search_query(const std::string& text) {
 
 struct Metadata {
     uint32_t num_docs = 0;
-    double avg_doc_length = 0.0;
-    std::unordered_map<uint32_t, uint32_t> doc_lengths;
+    double avg_title_length = 0.0;
+    double avg_body_length = 0.0;
+    std::unordered_map<uint32_t, uint32_t> title_lengths;
+    std::unordered_map<uint32_t, uint32_t> body_lengths;
 
     void load(const std::string& path) {
         std::cout << "Metadata: " << path << std::endl;
@@ -157,21 +159,33 @@ struct Metadata {
         if (in.peek() == EOF) throw std::runtime_error("Metadata file is empty");
 
         in.read(reinterpret_cast<char*>(&num_docs), sizeof(num_docs));
-        in.read(reinterpret_cast<char*>(&avg_doc_length), sizeof(avg_doc_length));
+        in.read(reinterpret_cast<char*>(&avg_title_length), sizeof(avg_title_length));
+        in.read(reinterpret_cast<char*>(&avg_body_length), sizeof(avg_body_length));
 
         while (in.peek() != EOF) {
-            uint32_t doc_id, length;
+            uint32_t doc_id, t_len, b_len;
             if (!in.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id))) break;
-            if (!in.read(reinterpret_cast<char*>(&length), sizeof(length))) break;
-            doc_lengths[doc_id] = length;
+            if (!in.read(reinterpret_cast<char*>(&t_len), sizeof(t_len))) break;
+            if (!in.read(reinterpret_cast<char*>(&b_len), sizeof(b_len))) break;
+            title_lengths[doc_id] = t_len;
+            body_lengths[doc_id] = b_len;
         }
     }
 
-    uint32_t get_doc_length(uint32_t doc_id) const {
-        auto it = doc_lengths.find(doc_id);
-        if (it == doc_lengths.end()) return 0;
+    uint32_t get_title_length(uint32_t doc_id) const {
+        auto it = title_lengths.find(doc_id);
+        if (it == title_lengths.end()) return 0;
         return it->second;
     }
+
+    uint32_t get_body_length(uint32_t doc_id) const {
+        auto it = body_lengths.find(doc_id);
+        if (it == body_lengths.end()) return 0;
+        return it->second;
+    }
+
+    // fallback for compatibility
+    uint32_t get_doc_length(uint32_t doc_id) const { return get_body_length(doc_id); }
 };
 
 struct PostingList {
@@ -985,8 +999,12 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<Metadata>(m, "Metadata")
         .def_readonly("num_docs", &Metadata::num_docs)
-        .def_readonly("avg_doc_length", &Metadata::avg_doc_length)
-        .def_readonly("doc_lengths", &Metadata::doc_lengths)
+        .def_readonly("avg_title_length", &Metadata::avg_title_length)
+        .def_readonly("avg_body_length", &Metadata::avg_body_length)
+        .def_readonly("title_lengths", &Metadata::title_lengths)
+        .def_readonly("body_lengths", &Metadata::body_lengths)
+        .def("get_title_length", &Metadata::get_title_length, py::arg("doc_id"))
+        .def("get_body_length", &Metadata::get_body_length, py::arg("doc_id"))
         .def("get_doc_length", &Metadata::get_doc_length, py::arg("doc_id"));
 
     py::class_<DocStore>(m, "DocStore")

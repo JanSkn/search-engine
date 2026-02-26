@@ -292,8 +292,10 @@ int main(int argc, char* argv[]) {
     termDictionary.reserve(500'000);
     termPostings.reserve(500'000);
 
-    std::vector<uint32_t> docLengths;
-    docLengths.reserve(3'300'000);  // ~3.2M documents in corpus
+    std::vector<uint32_t> titleLengths;
+    std::vector<uint32_t> bodyLengths;
+    titleLengths.reserve(3'300'000);
+    bodyLengths.reserve(3'300'000);
 
     std::string line;
     line.reserve(16384);
@@ -358,11 +360,13 @@ int main(int argc, char* argv[]) {
 
         docStore.addDocument(docId, url, title, currentLineOffset);
 
-        // ensure docLengths vector is large enough
-        if (static_cast<size_t>(docId) >= docLengths.size()) {
-            docLengths.resize(docId + 1, 0);
+        // ensure length vectors are large enough
+        if (static_cast<size_t>(docId) >= titleLengths.size()) {
+            titleLengths.resize(docId + 1, 0);
+            bodyLengths.resize(docId + 1, 0);
         }
-        uint32_t docTermCount = 0;
+        uint32_t titleTermCount = 0;
+        uint32_t bodyTermCount = 0;
 
         // tokenize title + content directly
         // title is from pos2+1 to pos3, content is from pos3+1 to end
@@ -371,13 +375,13 @@ int main(int argc, char* argv[]) {
         const char* contentStart = line.data() + pos3 + 1;
         size_t contentLen = line.size() - pos3 - 1;
 
-        // do not store title positions as it would mix with body positions
+        // tokenizer reset position internally in each call, so body positions start at 0
         tokenizer.tokenize(titleStart, titleLen,
-                           [&](std::string&& term, int position) { docTermCount++; });
+                           [&](std::string&& term, int position) { titleTermCount++; });
 
-        // process content (positions continue from title)
+        // process content
         tokenizer.tokenize(contentStart, contentLen, [&](std::string&& term, int position) {
-            docTermCount++;
+            bodyTermCount++;
 
             uint32_t termId;
             auto it = termDictionary.find(term);
@@ -401,7 +405,8 @@ int main(int argc, char* argv[]) {
             }
         });
 
-        docLengths[docId] = docTermCount;
+        titleLengths[docId] = titleTermCount;
+        bodyLengths[docId] = bodyTermCount;
 
         if (maxDocs != -1 && lineNumber >= maxDocs) break;
 
@@ -416,15 +421,18 @@ int main(int argc, char* argv[]) {
     docStore.close();
 
     // calculate statistics and write metadata file
-    uint64_t totalTerms = 0;
+    uint64_t totalTitleTerms = 0;
+    uint64_t totalBodyTerms = 0;
     uint32_t numDocs = 0;
-    for (size_t i = 0; i < docLengths.size(); i++) {
-        if (docLengths[i] > 0) {
-            totalTerms += docLengths[i];
+    for (size_t i = 0; i < titleLengths.size(); i++) {
+        if (titleLengths[i] > 0 || bodyLengths[i] > 0) {
+            totalTitleTerms += titleLengths[i];
+            totalBodyTerms += bodyLengths[i];
             numDocs++;
         }
     }
-    double avgDocLength = numDocs > 0 ? static_cast<double>(totalTerms) / numDocs : 0.0;
+    double avgTitleLength = numDocs > 0 ? static_cast<double>(totalTitleTerms) / numDocs : 0.0;
+    double avgBodyLength = numDocs > 0 ? static_cast<double>(totalBodyTerms) / numDocs : 0.0;
 
     std::string metadataFile = outputDir + "/metadata.bin";
     std::ofstream metaOut(metadataFile, std::ios::binary);
@@ -433,22 +441,26 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // write header: numDocs, avgDocLength
+    // write header: numDocs, avgTitleLength, avgBodyLength
     metaOut.write(reinterpret_cast<const char*>(&numDocs), sizeof(numDocs));
-    metaOut.write(reinterpret_cast<const char*>(&avgDocLength), sizeof(avgDocLength));
+    metaOut.write(reinterpret_cast<const char*>(&avgTitleLength), sizeof(avgTitleLength));
+    metaOut.write(reinterpret_cast<const char*>(&avgBodyLength), sizeof(avgBodyLength));
 
-    // write document lengths array (only non-zero entries with their docIds)
-    for (size_t docId = 0; docId < docLengths.size(); docId++) {
-        if (docLengths[docId] > 0) {
+    // write document lengths array
+    for (size_t docId = 0; docId < titleLengths.size(); docId++) {
+        if (titleLengths[docId] > 0 || bodyLengths[docId] > 0) {
             uint32_t id = static_cast<uint32_t>(docId);
-            uint32_t len = docLengths[docId];
+            uint32_t tLen = titleLengths[docId];
+            uint32_t bLen = bodyLengths[docId];
             metaOut.write(reinterpret_cast<const char*>(&id), sizeof(id));
-            metaOut.write(reinterpret_cast<const char*>(&len), sizeof(len));
+            metaOut.write(reinterpret_cast<const char*>(&tLen), sizeof(tLen));
+            metaOut.write(reinterpret_cast<const char*>(&bLen), sizeof(bLen));
         }
     }
     metaOut.close();
 
-    std::cout << "Metadata written: " << numDocs << " documents, avg length: " << avgDocLength
+    std::cout << "Metadata written: " << numDocs << " documents" << std::endl;
+    std::cout << "Avg title length: " << avgTitleLength << ", Avg body length: " << avgBodyLength
               << std::endl;
 
     double totalTime = duration<double>(high_resolution_clock::now() - start).count();
