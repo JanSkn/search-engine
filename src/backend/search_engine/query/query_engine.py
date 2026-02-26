@@ -61,6 +61,9 @@ class QueryEngine:
                 f"{time.perf_counter() - start_positional_intersect:.6f}s"
             )
             if len(result.postings) == 0:
+                # warm the cache for remaining terms (needed for snippet generation)
+                for remaining_term in terms[i + 1 :]:
+                    self.inverted_index.index.get(remaining_term)
                 break
 
         end = time.perf_counter()
