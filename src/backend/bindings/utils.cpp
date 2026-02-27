@@ -660,8 +660,7 @@ std::string DocStore::get_snippet(uint32_t doc_id, uint64_t tsv_offset) {
     int MAX_WINDOW_SIZE = 15;  // max. num of words PER subsnippet
 
     if (query_terms.empty()) {
-        throw std::runtime_error(
-            "Set query_terms (not empty): InvertedIndex().doc_store.query_terms = ...");
+        std::cerr << "INFO - query_terms empty" << std::endl;
     }
     std::set<std::string> unique_terms(query_terms.begin(), query_terms.end());
 

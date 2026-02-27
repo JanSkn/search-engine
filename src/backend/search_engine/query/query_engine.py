@@ -280,7 +280,6 @@ class QueryEngine:
         )
 
         base_terms = [t for t in normalized_tokens if t not in (AND | OR | NOT)]
-        self.inverted_index.doc_store.query_terms = list(set(base_terms))
 
         is_quoted_phrase = (raw_query.startswith('"') and raw_query.endswith('"')) or (
             raw_query.startswith("'") and raw_query.endswith("'")
@@ -291,27 +290,22 @@ class QueryEngine:
         if has_ops:
             try:
                 qt.parse_query(normalized_tokens)
-
-                self.inverted_index.doc_store.query_terms = qt.unique_terms
             except InvalidOperatorError as e:
                 logger.error(f"Invalid query syntax: {e}")
                 raise
 
-        _query_terms: list[str] = (
-            list(qt.unique_terms)
-            if (has_ops and getattr(qt, "unique_terms", None))
-            else list(dict.fromkeys(base_terms))
+        unique_terms = (
+            list(qt.unique_terms) if has_ops else list(dict.fromkeys(base_terms))
         )
-
-        query_terms = [term for term in _query_terms if term not in stop_words]
-        self.inverted_index.doc_store.query_terms = list(set(query_terms))
+        query_terms = [t for t in unique_terms if t not in stop_words]
+        self.inverted_index.doc_store.query_terms = query_terms
         cand_terms = self._select_terms_for_candidates(query_terms)
         candidate_doc_ids = self._build_candidates_from_terms(cand_terms)
         cand_set = set(candidate_doc_ids)
 
         logger.debug(f"candidate_doc_ids count={len(candidate_doc_ids)}")
 
-        restricted_result: PostingList
+        restricted_result: PostingList | None = None
 
         if is_quoted_phrase:
             logger.debug("Executing positional phrase query search...")
@@ -328,14 +322,16 @@ class QueryEngine:
             and_query = self._to_boolean_normalized_query(query_terms)
 
             logger.debug(f"Converted to AND query: {and_query}")
+            if and_query:
+                qt2 = QueryTree()
+                qt2.parse_query(and_query)
+                logger.debug(f"Query tree: {qt2.root}")
 
-            qt2 = QueryTree()
-            qt2.parse_query(and_query)
-            logger.debug(f"Query tree: {qt2.root}")
-
-            t_bool = time.perf_counter()
-            restricted_result = self._bool_search(qt2.root, cand_set, candidate_doc_ids)
-            logger.debug(f"Bool search time: {time.perf_counter() - t_bool:.6f}s")
+                t_bool = time.perf_counter()
+                restricted_result = self._bool_search(
+                    qt2.root, cand_set, candidate_doc_ids
+                )
+                logger.debug(f"Bool search time: {time.perf_counter() - t_bool:.6f}s")
 
         has_boolean_results = (
             restricted_result is not None and len(restricted_result.postings) > 0
