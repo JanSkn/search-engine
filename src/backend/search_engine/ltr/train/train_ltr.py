@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import math
 import os
@@ -44,35 +45,38 @@ class JsonlLTRDataset(Dataset):
         self.feature_order = feature_order
         self.max_docs = max_docs
 
-        self.rows = []
+        # Parse JSON and immediately convert to tensors — don't keep raw dicts
+        self.qids: List[int] = []
+        self.xs: List[torch.Tensor] = []
+        self.ys: List[torch.Tensor] = []
+
         with self.path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                self.rows.append(json.loads(line))
+                row = json.loads(line)
+                docs = row["docs"]
+                if max_docs is not None:
+                    docs = docs[:max_docs]
+
+                feats = []
+                labels = []
+                for d in docs:
+                    feat = d["features"]
+                    feats.append([float(feat.get(name, 0.0)) for name in feature_order])
+                    labels.append(float(d.get("label", 0.0)))
+
+                self.qids.append(int(row["qid"]))
+                self.xs.append(torch.tensor(feats, dtype=torch.float32))
+                self.ys.append(torch.tensor(labels, dtype=torch.float32))
+                # row goes out of scope here — GC can reclaim the dict
 
     def __len__(self) -> int:
-        return len(self.rows)
+        return len(self.qids)
 
     def __getitem__(self, idx: int) -> Tuple[int, torch.Tensor, torch.Tensor]:
-        row = self.rows[idx]
-        qid = int(row["qid"])
-        docs = row["docs"]
-
-        if self.max_docs is not None:
-            docs = docs[: self.max_docs]
-
-        feats = []
-        labels = []
-        for d in docs:
-            f = d["features"]
-            feats.append([float(f.get(name, 0.0)) for name in self.feature_order])
-            labels.append(float(d.get("label", 0.0)))
-
-        x = torch.tensor(feats, dtype=torch.float32)     # (L, F)
-        y = torch.tensor(labels, dtype=torch.float32)    # (L,)
-        return qid, x, y
+        return self.qids[idx], self.xs[idx], self.ys[idx]
 
 
 def collate_fn(batch_items: List[Tuple[int, torch.Tensor, torch.Tensor]]) -> Batch:
@@ -212,10 +216,8 @@ def evaluate(model: TinyLTRModel, loader: DataLoader, device: torch.device) -> D
 
 
 def flatten_train_features(train_ds: JsonlLTRDataset) -> torch.Tensor:
-    all_feats = []
-    for _, x, _ in tqdm(train_ds, desc="Collect train features"):
-        all_feats.append(x)  # (L, F)
-    return torch.cat(all_feats, dim=0)  # (N, F)
+    # xs are already tensors stored in the dataset — concat directly
+    return torch.cat(train_ds.xs, dim=0)  # (N, F)
 
 
 def main():
@@ -261,6 +263,8 @@ def main():
     # Fit normalization on TRAIN set and store inside model buffers (saved with state_dict)
     x_all = flatten_train_features(train_ds)  # (N, F)
     model.norm.fit(x_all)
+    del x_all
+    gc.collect()
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -303,6 +307,9 @@ def main():
 
             pbar.set_postfix(loss=f"{loss.item():.4f}")
             global_step += 1
+
+            if global_step % 500 == 0:
+                writer.flush()
 
         # full validation at epoch end (don’t look at test until the end) :contentReference[oaicite:10]{index=10}
         val_metrics = evaluate(model, val_loader, device)
