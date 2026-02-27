@@ -118,6 +118,8 @@ class QueryEngine:
 
         return PostingList(postings=filtered_postings, term_frequencies=filtered_tf, positions=filtered_pos)
 
+
+######################delete
     @staticmethod
     def _filter_posting_list_postings_only(pl: PostingList | None, allowed: set[int]) -> PostingList:
         if pl is None:
@@ -218,34 +220,40 @@ class QueryEngine:
     # -----------------
     # Restricted boolean / phrase
     # -----------------
-    def _bool_search_restricted(self, node: Node | None, allowed: set[int]) -> PostingList:
+    def _bool_search_restricted(self, node: Node | None, allowed: set[int], cand_list: list[int]) -> PostingList:
         if node is None:
             return self._empty_pl()
 
-        if node.value not in AND | OR | NOT:
+        if node.value not in (AND | OR | NOT):
             pl = self.inverted_index.index.get(node.value)
-            return self._filter_posting_list_postings_only(pl, allowed)
+            if pl is None:
+                return self._empty_pl()
+
+            tf_map = pl.term_frequencies  # dict-like: doc_id -> tf
+            # candidate-driven: O(|cand_list|) statt O(df(term))
+            out = [d for d in cand_list if d in tf_map]
+            return PostingList(postings=out, term_frequencies={}, positions={})
 
         if node.value in AND:
             left_is_not = node.left and node.left.value in NOT
             right_is_not = node.right and node.right.value in NOT
 
             if left_is_not:
-                not_docs = self._bool_search_restricted(node.left.right if node.left else None, allowed)
-                right = self._bool_search_restricted(node.right, allowed)
+                not_docs = self._bool_search_restricted(node.left.right if node.left else None, allowed, cand_list)
+                right = self._bool_search_restricted(node.right, allowed, cand_list)
                 return self._bool_op_postings(right, not_docs, "NOT")
 
             if right_is_not:
-                left = self._bool_search_restricted(node.left, allowed)
-                not_docs = self._bool_search_restricted(node.right.right if node.right else None, allowed)
+                left = self._bool_search_restricted(node.left, allowed, cand_list)
+                not_docs = self._bool_search_restricted(node.right.right if node.right else None, allowed, cand_list)
                 return self._bool_op_postings(left, not_docs, "NOT")
 
-            left = self._bool_search_restricted(node.left, allowed)
-            right = self._bool_search_restricted(node.right, allowed)
+            left = self._bool_search_restricted(node.left, allowed, cand_list)
+            right = self._bool_search_restricted(node.right, allowed, cand_list)
             return self._bool_op_postings(left, right, "AND")
 
-        left = self._bool_search_restricted(node.left, allowed)
-        right = self._bool_search_restricted(node.right, allowed)
+        left = self._bool_search_restricted(node.left, allowed, cand_list)
+        right = self._bool_search_restricted(node.right, allowed, cand_list)
         return self._bool_op_postings(left, right, "OR")
 
     def _positional_phrase_search_restricted(self, terms: list[str], allowed: set[int]) -> PostingList:
@@ -424,7 +432,7 @@ class QueryEngine:
             restricted_result = self._positional_phrase_search_restricted(phrase_terms, cand_set)
 
         elif has_ops:
-            restricted_result = self._bool_search_restricted(qt.root, cand_set)
+            restricted_result = self._bool_search_restricted(qt.root, cand_set, candidate_doc_ids)
 
         else:
             t_and_build = time.perf_counter()
@@ -437,7 +445,7 @@ class QueryEngine:
             logger.debug(f"parse_query (no ops) time: {time.perf_counter() - t_parse_no_ops:.6f}s")
 
             t_bool_restricted = time.perf_counter()
-            restricted_result = self._bool_search_restricted(qt2.root, cand_set)
+            restricted_result = self._bool_search_restricted(qt2.root, cand_set, candidate_doc_ids)
             logger.debug(f"_bool_search_restricted time: {time.perf_counter() - t_bool_restricted:.6f}s")
 
         logger.debug(f"Restricted filter time: {time.perf_counter() - t_filter:.6f}s")
