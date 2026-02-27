@@ -11,13 +11,6 @@ from cpp_utils import normalize_search_query, PostingList  # type: ignore
 
 from backend.search_engine.scoring.bm25 import bm25_score_docs_fielded, BM25Config
 
-# Single body-only BM25 config, reused across all calls
-_BM25_BODY_ONLY = BM25Config(
-    boost_title=0.0,
-    boost_body=1.0,
-    b_title=0.0,
-)
-
 
 def parse_query_terms(query: str) -> list[str]:
     # consistent with your engine (stemming + keep operators)
@@ -125,6 +118,18 @@ def compute_features_for_doc(
     query_terms: Sequence[str],
     postings_by_term: Mapping[str, PostingList],
 ) -> FeatureVector:
+    # BM25: compute body-only by setting title boost=0
+    cfg = BM25Config(
+        boost_title=0.0,
+        boost_body=1.0,
+        b_title=0.0,            # irrelevant since boost_title=0
+        b_body=BM25Config().b_body,
+        k1=BM25Config().k1,
+        idf_threshold=BM25Config().idf_threshold,
+        clamp_negative_idf=BM25Config().clamp_negative_idf,
+        min_terms_after_threshold=BM25Config().min_terms_after_threshold,
+    )
+
     scores = bm25_score_docs_fielded(
         list(query_terms),
         postings_by_term=postings_by_term,
@@ -135,7 +140,7 @@ def compute_features_for_doc(
         get_title_len=lambda d: int(inverted_index.metadata.get_title_length(int(d))),
         get_body_len=lambda d: int(inverted_index.metadata.get_body_length(int(d))),
         get_title_tf=lambda d, t: int(title_tf(inverted_index, int(d), str(t))),
-        cfg=_BM25_BODY_ONLY,
+        cfg=cfg,
     )
     bm25_body = float(scores.get(int(doc_id), 0.0))
 
