@@ -1,16 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import Sequence, Mapping
+from typing import Mapping, Sequence
 
-# your C++ bindings module name might be: cpp_utils or similar.
-# In your code snippet: "from cpp_utils import PostingList"
-# and normalize_search_query is exported from _core.
-# Adjust imports if needed.
-from cpp_utils import normalize_search_query, PostingList  # type: ignore
-
-from backend.search_engine.scoring.bm25 import bm25_score_docs_fielded, BM25Config
+from cpp_utils import PostingList, normalize_search_query  # type: ignore
 
 
 def parse_query_terms(query: str) -> list[str]:
@@ -22,7 +15,9 @@ def parse_query_terms(query: str) -> list[str]:
     return [t for t in terms if t not in drop]
 
 
-def build_postings_by_term(inverted_index, query_terms: Sequence[str]) -> dict[str, PostingList]:
+def build_postings_by_term(
+    inverted_index, query_terms: Sequence[str]
+) -> dict[str, PostingList]:
     postings: dict[str, PostingList] = {}
     for t in query_terms:
         pl = inverted_index.index.get(t)
@@ -32,7 +27,9 @@ def build_postings_by_term(inverted_index, query_terms: Sequence[str]) -> dict[s
     return postings
 
 
-def matched_terms_count(doc_id: int, postings_by_term: Mapping[str, PostingList]) -> int:
+def matched_terms_count(
+    doc_id: int, postings_by_term: Mapping[str, PostingList]
+) -> int:
     # how many query terms appear in doc (binary per term)
     c = 0
     for t, pl in postings_by_term.items():
@@ -42,7 +39,9 @@ def matched_terms_count(doc_id: int, postings_by_term: Mapping[str, PostingList]
     return c
 
 
-def phrase_match_indicator(doc_id: int, query_terms: Sequence[str], postings_by_term: Mapping[str, PostingList]) -> int:
+def phrase_match_indicator(
+    doc_id: int, query_terms: Sequence[str], postings_by_term: Mapping[str, PostingList]
+) -> int:
     """
     Phrase match using positional postings:
     For terms t1 t2 ... tn, check existence of positions p, p+1, ..., p+n-1.
@@ -65,25 +64,26 @@ def phrase_match_indicator(doc_id: int, query_terms: Sequence[str], postings_by_
     # fast set-based progressive narrowing
     base = set(positions_lists[0])  # candidate start positions of first term
     for i in range(1, len(positions_lists)):
-        shifted = {p - i for p in positions_lists[i]}  # positions where phrase could start
+        shifted = {
+            p - i for p in positions_lists[i]
+        }  # positions where phrase could start
         base &= shifted
         if not base:
             return 0
     return 1
 
 
-@lru_cache(maxsize=200_000)
-def _cached_title_terms(inverted_index, doc_id: int) -> tuple[str, ...]:
+def _get_title_terms(inverted_index, doc_id: int) -> tuple[str, ...]:
     title = inverted_index.doc_store.get_title_only(int(doc_id))
     if not title:
-        return tuple()
+        return ()
     terms = normalize_search_query(title)
     drop = {"AND", "OR", "NOT", "&", "|", "-", "(", ")"}
     return tuple(t for t in terms if t not in drop)
 
 
 def in_title_indicator(inverted_index, doc_id: int, query_terms: Sequence[str]) -> int:
-    title_terms = set(_cached_title_terms(inverted_index, int(doc_id)))
+    title_terms = set(_get_title_terms(inverted_index, int(doc_id)))
     for t in query_terms:
         if t in title_terms:
             return 1
@@ -92,7 +92,7 @@ def in_title_indicator(inverted_index, doc_id: int, query_terms: Sequence[str]) 
 
 def title_tf(inverted_index, doc_id: int, term: str) -> int:
     # used by BM25 scorer; based on cached title terms
-    return int(_cached_title_terms(inverted_index, int(doc_id)).count(term))
+    return int(_get_title_terms(inverted_index, int(doc_id)).count(term))
 
 
 @dataclass(frozen=True)
@@ -120,29 +120,17 @@ def compute_features_for_doc(
     query_terms: Sequence[str],
     postings_by_term: Mapping[str, PostingList],
 ) -> FeatureVector:
-    # BM25: compute body-only by setting title boost=0
-    cfg = BM25Config(
+    scores = inverted_index.bm25_score_fielded(
+        query_terms=list(query_terms),
+        candidate_doc_ids=[int(doc_id)],
+        k1=1.2,
         boost_title=0.0,
         boost_body=1.0,
-        b_title=0.0,            # irrelevant since boost_title=0
-        b_body=BM25Config().b_body,
-        k1=BM25Config().k1,
-        idf_threshold=BM25Config().idf_threshold,
-        clamp_negative_idf=BM25Config().clamp_negative_idf,
-        min_terms_after_threshold=BM25Config().min_terms_after_threshold,
-    )
-
-    scores = bm25_score_docs_fielded(
-        list(query_terms),
-        postings_by_term=postings_by_term,
-        candidate_doc_ids=[int(doc_id)],
-        num_docs=int(inverted_index.metadata.num_docs),
-        avg_title_len=float(inverted_index.metadata.avg_title_length),
-        avg_body_len=float(inverted_index.metadata.avg_body_length),
-        get_title_len=lambda d: int(inverted_index.metadata.get_title_length(int(d))),
-        get_body_len=lambda d: int(inverted_index.metadata.get_body_length(int(d))),
-        get_title_tf=lambda d, t: int(title_tf(inverted_index, int(d), str(t))),
-        cfg=cfg,
+        b_title=0.0,
+        b_body=0.75,
+        idf_threshold=0.5,
+        clamp_negative_idf=True,
+        min_terms_after_threshold=1,
     )
     bm25_body = float(scores.get(int(doc_id), 0.0))
 

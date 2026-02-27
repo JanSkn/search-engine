@@ -1,23 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import random
 from pathlib import Path
 
+from cpp_utils import InvertedIndex  # type: ignore
 from tqdm import tqdm
 
-from .config import DatasetPaths, BuildConfig
+from .config import BuildConfig, DatasetPaths
+from .features import (
+    build_postings_by_term,
+    compute_features_for_doc,
+    parse_query_terms,
+)
 from .io_utils import (
     iter_queries,
-    sample_qids_from_qrels,
     load_qrels_for_qids,
     load_top100_selection,
+    sample_qids_from_qrels,
 )
-from .features import parse_query_terms, build_postings_by_term, compute_features_for_doc
-
-# Your inverted index class from C++ bindings
-from cpp_utils import InvertedIndex  # type: ignore
 
 
 def split_qids(qids: list[int], *, seed: int) -> tuple[set[int], set[int], set[int]]:
@@ -141,18 +144,34 @@ def write_jsonl(path: Path, rows, *, pretty: bool) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", type=str, required=True, help="Folder containing doctrain-*.tsv")
-    ap.add_argument("--out-dir", type=str, required=True, help="Output folder for train/val/test jsonl")
-    ap.add_argument("--index-dir", type=str, required=True, help="Path to your built inverted index base dir")
+    ap.add_argument(
+        "--data-dir", type=str, required=True, help="Folder containing doctrain-*.tsv"
+    )
+    ap.add_argument(
+        "--out-dir",
+        type=str,
+        required=True,
+        help="Output folder for train/val/test jsonl",
+    )
+    ap.add_argument(
+        "--index-dir",
+        type=str,
+        required=True,
+        help="Path to your built inverted index base dir",
+    )
 
     ap.add_argument("--seed", type=int, default=BuildConfig.seed)
-    ap.add_argument("--max-queries", type=int, default=100, help="Limit number of qids")
+    ap.add_argument("--max-queries", type=int, default=500, help="Limit number of qids")
 
     ap.add_argument("--hard-negatives", type=int, default=BuildConfig.hard_negatives)
     ap.add_argument("--soft-negatives", type=int, default=BuildConfig.soft_negatives)
     ap.add_argument("--soft-rank", type=int, default=BuildConfig.soft_rank)
-    ap.add_argument("--soft-fallback-from", type=int, default=BuildConfig.soft_fallback_from)
-    ap.add_argument("--soft-fallback-to", type=int, default=BuildConfig.soft_fallback_to)
+    ap.add_argument(
+        "--soft-fallback-from", type=int, default=BuildConfig.soft_fallback_from
+    )
+    ap.add_argument(
+        "--soft-fallback-to", type=int, default=BuildConfig.soft_fallback_to
+    )
 
     ap.add_argument("--pretty-json", action="store_true")
 
@@ -173,11 +192,13 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     paths = DatasetPaths.from_base(data_dir, out_dir)
 
-    # 1) sample qids from QRELS (guaranteed to have positives)
-    qid_list = sample_qids_from_qrels(paths.qrels_tsv, seed=cfg.seed, max_queries=cfg.max_queries)
+    # sample qids from QRELS (guaranteed to have positives)
+    qid_list = sample_qids_from_qrels(
+        paths.qrels_tsv, seed=cfg.seed, max_queries=cfg.max_queries
+    )
     qids = set(qid_list)
 
-    # 1b) build qid->query map ONLY for those qids (streaming scan over queries.tsv)
+    # build qid->query map ONLY for those qids (streaming scan over queries.tsv)
     qid_to_query: dict[int, str] = {}
     missing = set(qids)
 
@@ -193,13 +214,13 @@ def main() -> None:
         qids = set(qid_to_query.keys())
         qid_list = list(qids)
 
-    # 2) split by qid (avoid leakage across query)
+    # split by qid (avoid leakage across query)
     train_qids, val_qids, test_qids = split_qids(qid_list, seed=cfg.seed)
 
-    # 3) load qrels only for selected qids
+    # load qrels only for selected qids
     qrels = load_qrels_for_qids(paths.qrels_tsv, qids)
 
-    # 4) load only needed top100 parts for selected qids
+    # load only needed top100 parts for selected qids
     top100_sel = load_top100_selection(
         paths.top100_tsv,
         qids,
@@ -209,15 +230,13 @@ def main() -> None:
         soft_fallback_to=cfg.soft_fallback_to,
     )
 
-    # 5) open index once
+    # open index once
     inverted_index = InvertedIndex(str(args.index_dir))
 
-    # 6) streaming build: write train/val/test incrementally (RAM-efficient)
     out_dir.mkdir(parents=True, exist_ok=True)
     f_train = paths.train_jsonl.open("w", encoding="utf-8")
     f_val = paths.val_jsonl.open("w", encoding="utf-8")
     f_test = paths.test_jsonl.open("w", encoding="utf-8")
-    ##########DEBUG
     sk_no_qrels = 0
     sk_no_top100 = 0
     sk_no_query = 0
@@ -248,7 +267,6 @@ def main() -> None:
                 soft_fallback_from=cfg.soft_fallback_from,
                 soft_fallback_to=cfg.soft_fallback_to,
             )
-            ##########DEBUG
             query = qid_to_query.get(qid)
             if query is None:
                 sk_no_query += 1
@@ -265,7 +283,6 @@ def main() -> None:
                 continue
 
             # ensure final count = 1 + hard + soft
-            # (If data quality issues cause fewer, we still write what we have.)
             row = build_one_example(
                 inverted_index,
                 qid=qid,
@@ -273,7 +290,6 @@ def main() -> None:
                 pos_doc=pos_doc,
                 neg_docs=neg_docs,
             )
-            #######DEBUG
             written += 1
             s = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
             if cfg.pretty_json:
@@ -285,6 +301,11 @@ def main() -> None:
                 f_val.write(s + "\n")
             else:
                 f_test.write(s + "\n")
+
+            del row, s
+
+            if written % 500 == 0:
+                gc.collect()
 
     finally:
         f_train.close()

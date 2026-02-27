@@ -242,6 +242,8 @@ dist-ssr
 !src/backend/search_engine/index_builder/data/data.md
 /src/backend/search_engine/index/bin/
 src/backend/search_engine/models/IVFPQ.faiss
+src/backend/search_engine/models/ltr_model.pt
 src/backend/search_engine/models/neuspell-scrnn-probwordnoise
-src/backend/search_engine/ltr/build_data/data
+src/backend/search_engine/ltr/data
+src/backend/search_engine/ltr/train/output
 memory_log.txt

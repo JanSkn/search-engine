@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import heapq
 import time
-from dataclasses import dataclass
 
 from cpp_utils import (  # type: ignore [import-untyped]
     PostingList,
@@ -22,6 +21,7 @@ from backend.search_engine.query.query_preprocessing import (
 )
 from backend.search_engine.scoring.bm25 import (
     BM25Config,
+    RetrievalConfig,
     bm25_idf,
     stop_words,
 )
@@ -29,19 +29,18 @@ from backend.search_engine.semantic_search.query_embeddings import SemanticSearc
 from backend.search_engine.spell_correction.spell_correction import repl
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 
+try:
+    from backend.search_engine.ltr import reranker as _ltr_module
+
+    _LTR_AVAILABLE = True
+except ImportError:
+    _ltr_module = None  # type: ignore[assignment]
+    _LTR_AVAILABLE = False
+
 logger = get_logger(__name__)
 
 
-@dataclass(frozen=True)
-class RetrievalConfig:
-    max_terms_for_candidates: int = 3
-    max_candidates_total: int = 50_000
-    max_candidates_per_term: int = 30_000
-
-    idf_threshold: float = 0.0
-    min_terms_after_threshold: int = 1
-
-    allow_fallback_full_retrieval: bool = True
+# TODO: wild mix of query_terms in index for snippets
 
 
 class QueryEngine:
@@ -277,7 +276,7 @@ class QueryEngine:
         t_corr = time.perf_counter()
         correction = repl(self.corrector, raw_query)
         logger.debug(
-            f"spell correction total time: {time.perf_counter() - t_corr:.6f}s"
+            f"Spell correction total time: {time.perf_counter() - t_corr:.6f}s"
         )
 
         base_terms = [t for t in normalized_tokens if t not in (AND | OR | NOT)]
@@ -405,6 +404,17 @@ class QueryEngine:
             lists=ranked_lists, top_n=limit, k=60
         )
 
+        # if _LTR_AVAILABLE and _ltr_module is not None:
+        #     try:
+        #         t_ltr = time.perf_counter()
+        #         reranker = _ltr_module.get_reranker()
+        #         final_top = reranker.rerank(final_top, raw_query, self.inverted_index)
+        #         logger.debug(f"LTR rerank time: {time.perf_counter() - t_ltr:.6f}s")
+        #     except Exception as e:
+        #         logger.warning(
+        #             f"LTR reranking failed, using BM25 + semantic ranking: {e}"
+        #         )
+
         t_top = time.perf_counter()
         search_results: list[SearchResult] = []
 
@@ -443,6 +453,4 @@ class QueryEngine:
             f"Returned {len(search_results)} results. "
             f"Total execution time: {end - start:.6f} seconds"
         )
-        # clear cache to free memory
-        self.inverted_index.clear_cache()  # TODO takes much time, zb in app.py auslagern nach response
         return SearchResults(search_results=search_results, correction=correction)

@@ -29,11 +29,12 @@ def iter_queries(path: Path) -> Iterable[Query]:
                 continue
 
 
-def sample_qids(queries_path: Path, *, seed: int, max_queries: int | None) -> list[Query]:
+def sample_qids(
+    queries_path: Path, *, seed: int, max_queries: int | None
+) -> list[Query]:
     rnd = random.Random(seed)
 
     if max_queries is None:
-        # wenn du wirklich ALLE willst, streamen wir trotzdem, aber ohne shuffle
         return list(iter_queries(queries_path))
 
     k = int(max_queries)
@@ -52,7 +53,10 @@ def sample_qids(queries_path: Path, *, seed: int, max_queries: int | None) -> li
                 reservoir[j] = q
     return reservoir
 
-def sample_qids_from_qrels(qrels_path: Path, *, seed: int, max_queries: int | None) -> list[int]:
+
+def sample_qids_from_qrels(
+    qrels_path: Path, *, seed: int, max_queries: int | None
+) -> list[int]:
     """
     Sample qids from doctrain-qrels.tsv (space-separated).
     Uses reservoir sampling if max_queries is set.
@@ -184,9 +188,5 @@ def load_top100_selection(
 
             if soft_low <= rank <= soft_high:
                 sel.soft_candidates[rank] = docid
-
-            # small early-stop optimization: if we already got all hard ranks
-            # and the whole soft bucket for this qid, we could stop per-qid,
-            # but doing that cleanly is messy; streaming is fast enough.
 
     return out
