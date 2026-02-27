@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import heapq
 import time
-from collections import Counter
 from dataclasses import dataclass
 
 from cpp_utils import (  # type: ignore [import-untyped]
     PostingList,
     normalize_search_query,
-    positional_intersect,
 )
 
 from backend.logging_config import get_logger
@@ -25,7 +23,6 @@ from backend.search_engine.query.query_preprocessing import (
 from backend.search_engine.scoring.bm25 import (
     BM25Config,
     bm25_idf,
-    bm25_score_docs_fielded,
     stop_words,
 )
 from backend.search_engine.semantic_search.query_embeddings import SemanticSearcher
@@ -223,54 +220,7 @@ class QueryEngine:
     def _bool_search(
         self, node: Node | None, allowed: set[int], cand_list: list[int]
     ) -> PostingList:
-        start = time.perf_counter()
-        logger.debug(f"Evaluating node: {getattr(node, 'value', None)}")
-
-        if node is None:
-            return self._empty_pl()
-
-        if node.value not in (AND | OR | NOT):
-            pl = self.inverted_index.index.get(node.value)
-            if pl is None:
-                result = self._empty_pl()
-            else:
-                tf_map = pl.term_frequencies  # dict-like: doc_id -> tf
-                out = [d for d in cand_list if d in tf_map]
-                result = PostingList(postings=out, term_frequencies={}, positions={})
-
-        elif node.value in AND:
-            left_is_not = node.left and node.left.value in NOT
-            right_is_not = node.right and node.right.value in NOT
-
-            if left_is_not:
-                not_docs = self._bool_search(
-                    node.left.right if node.left else None, allowed, cand_list
-                )
-                right = self._bool_search(node.right, allowed, cand_list)
-                result = self._bool_op_postings(right, not_docs, "NOT")
-
-            elif right_is_not:
-                left = self._bool_search(node.left, allowed, cand_list)
-                not_docs = self._bool_search(
-                    node.right.right if node.right else None, allowed, cand_list
-                )
-                result = self._bool_op_postings(left, not_docs, "NOT")
-
-            else:
-                left = self._bool_search(node.left, allowed, cand_list)
-                right = self._bool_search(node.right, allowed, cand_list)
-                result = self._bool_op_postings(left, right, "AND")
-
-        else:  # OR
-            left = self._bool_search(node.left, allowed, cand_list)
-            right = self._bool_search(node.right, allowed, cand_list)
-            result = self._bool_op_postings(left, right, "OR")
-
-        logger.debug(
-            f"Node={node.value!r}, Result docs={len(result.postings)}, "
-            f"Execution time: {time.perf_counter() - start:.6f} seconds"
-        )
-        return result
+        return self.inverted_index.bool_search(node, cand_list)
 
     def _positional_phrase_search(
         self, terms: list[str], allowed: set[int]
@@ -278,35 +228,7 @@ class QueryEngine:
         start = time.perf_counter()
         logger.debug(f"Performing phrase search for: {terms}")
 
-        if not terms:
-            return self._empty_pl()
-
-        first = self._filter_posting_list(
-            self.inverted_index.index.get(terms[0]), allowed
-        )
-        if len(first.postings) == 0:
-            return self._empty_pl()
-
-        result = first
-        for i, term in enumerate(terms[1:], start=1):
-            next_pl = self._filter_posting_list(
-                self.inverted_index.index.get(term), allowed
-            )
-            if len(next_pl.postings) == 0:
-                return self._empty_pl()
-
-            start_positional_intersect = time.perf_counter()
-            result = positional_intersect(result, next_pl, distance=i)
-            logger.debug(
-                f"Positional intersect for term '{term}' "
-                f"with distance={i} completed in "
-                f"{time.perf_counter() - start_positional_intersect:.6f}s"
-            )
-            if len(result.postings) == 0:
-                # warm the cache for remaining terms (needed for snippet generation)
-                for remaining_term in terms[i + 1 :]:
-                    self.inverted_index.index.get(remaining_term)
-                break
+        result = self.inverted_index.positional_phrase_search(terms, allowed)
 
         logger.debug(
             f"Result docs: {len(result.postings)}, "
@@ -347,11 +269,7 @@ class QueryEngine:
 
         qt = QueryTree()
 
-        t_norm = time.perf_counter()
         normalized_tokens = normalize_search_query(self._query)
-        logger.debug(
-            f"normalize_search_query time: {time.perf_counter() - t_norm:.6f}s"
-        )
         logger.debug(f"Normalized search query: {normalized_tokens}")
 
         raw_query = self._query.strip()
@@ -363,36 +281,19 @@ class QueryEngine:
         )
 
         base_terms = [t for t in normalized_tokens if t not in (AND | OR | NOT)]
-
-        t_set_qt = time.perf_counter()
         self.inverted_index.doc_store.query_terms = list(set(base_terms))
-        logger.debug(
-            f"set doc_store.query_terms (base) time: {time.perf_counter() - t_set_qt:.6f}s"
-        )
 
-        t_flags = time.perf_counter()
         is_quoted_phrase = (raw_query.startswith('"') and raw_query.endswith('"')) or (
             raw_query.startswith("'") and raw_query.endswith("'")
         )
-        logger.debug(f"quoted phrase check time: {time.perf_counter() - t_flags:.6f}s")
 
-        t_has_ops = time.perf_counter()
         has_ops = qt._has_operators(normalized_tokens)
-        logger.debug(f"_has_operators time: {time.perf_counter() - t_has_ops:.6f}s")
 
         if has_ops:
             try:
-                t_parse_ops = time.perf_counter()
                 qt.parse_query(normalized_tokens)
-                logger.debug(
-                    f"parse_query (ops) time: {time.perf_counter() - t_parse_ops:.6f}s"
-                )
 
-                t_set_qt2 = time.perf_counter()
                 self.inverted_index.doc_store.query_terms = qt.unique_terms
-                logger.debug(
-                    f"set doc_store.query_terms (ops) time: {time.perf_counter() - t_set_qt2:.6f}s"
-                )
             except InvalidOperatorError as e:
                 logger.error(f"Invalid query syntax: {e}")
                 raise
@@ -404,13 +305,13 @@ class QueryEngine:
         )
 
         query_terms = [term for term in _query_terms if term not in stop_words]
+        self.inverted_index.doc_store.query_terms = list(set(query_terms))
         cand_terms = self._select_terms_for_candidates(query_terms)
         candidate_doc_ids = self._build_candidates_from_terms(cand_terms)
         cand_set = set(candidate_doc_ids)
 
         logger.debug(f"candidate_doc_ids count={len(candidate_doc_ids)}")
 
-        t_filter = time.perf_counter()
         restricted_result: PostingList
 
         if is_quoted_phrase:
@@ -430,66 +331,39 @@ class QueryEngine:
             logger.debug(f"Converted to AND query: {and_query}")
 
             qt2 = QueryTree()
-            t_parse_no_ops = time.perf_counter()
             qt2.parse_query(and_query)
-            logger.debug(
-                f"parse_query (no ops) time: {time.perf_counter() - t_parse_no_ops:.6f}s"
-            )
             logger.debug(f"Query tree: {qt2.root}")
 
             t_bool = time.perf_counter()
             restricted_result = self._bool_search(qt2.root, cand_set, candidate_doc_ids)
             logger.debug(f"Bool search time: {time.perf_counter() - t_bool:.6f}s")
 
-        logger.debug(f"Filter time: {time.perf_counter() - t_filter:.6f}s")
-
         has_boolean_results = (
             restricted_result is not None and len(restricted_result.postings) > 0
         )
 
-        # scoring (Fielded BM25)
+        # scoring
         if has_boolean_results:
             logger.debug(
                 f"Found {len(restricted_result.postings)} results "
                 f"in {time.perf_counter() - start:.6f} seconds"
             )
             t_score = time.perf_counter()
-            metadata = self.inverted_index.metadata
 
-            t_final_ids = time.perf_counter()
-            final_candidate_doc_ids = list(restricted_result.postings)
-            logger.debug(
-                f"final_candidate_doc_ids build time: {time.perf_counter() - t_final_ids:.6f}s"
-            )
+            final_candidate_doc_ids = restricted_result.postings
 
-            # title TF cache: doc_id -> Counter(term->tf) for only query terms.
-            # IMPORTANT: uses get_title_only (no snippet IO).
-            qterm_set = set(query_terms)
-            title_tf_cache: dict[int, Counter[str]] = {}
-
-            def get_title_tf(doc_id: int, term: str) -> int:
-                c = title_tf_cache.get(doc_id)
-                if c is None:
-                    title_opt = self.inverted_index.doc_store.get_title_only(
-                        int(doc_id)
-                    )
-                    title = title_opt or ""
-                    toks = normalize_search_query(title)  # stem+tokenize in C++
-                    c = Counter(t for t in toks if t in qterm_set)
-                    title_tf_cache[doc_id] = c
-                return int(c.get(term, 0))
-
-            scores = bm25_score_docs_fielded(
+            cfg = self.bm25_cfg
+            scores = self.inverted_index.bm25_score_fielded(
                 query_terms=query_terms,
-                postings_by_term=self.inverted_index.index,  # term -> PostingList
                 candidate_doc_ids=final_candidate_doc_ids,
-                num_docs=int(metadata.num_docs),
-                avg_title_len=float(metadata.avg_title_length),
-                avg_body_len=float(metadata.avg_body_length),
-                get_title_len=metadata.get_title_length,
-                get_body_len=metadata.get_body_length,
-                get_title_tf=get_title_tf,
-                cfg=self.bm25_cfg,
+                k1=cfg.k1,
+                boost_title=cfg.boost_title,
+                boost_body=cfg.boost_body,
+                b_title=cfg.b_title,
+                b_body=cfg.b_body,
+                idf_threshold=cfg.idf_threshold,
+                clamp_negative_idf=cfg.clamp_negative_idf,
+                min_terms_after_threshold=cfg.min_terms_after_threshold,
             )
             logger.debug(
                 f"Fielded BM25 scoring time: {time.perf_counter() - t_score:.6f}s"
@@ -570,5 +444,5 @@ class QueryEngine:
             f"Total execution time: {end - start:.6f} seconds"
         )
         # clear cache to free memory
-        self.inverted_index.clear_cache()
+        self.inverted_index.clear_cache()  # TODO takes much time, zb in app.py auslagern nach response
         return SearchResults(search_results=search_results, correction=correction)
