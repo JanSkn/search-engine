@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Sequence, Mapping
 
 # your C++ bindings module name might be: cpp_utils or similar.
@@ -11,6 +10,13 @@ from typing import Sequence, Mapping
 from cpp_utils import normalize_search_query, PostingList  # type: ignore
 
 from backend.search_engine.scoring.bm25 import bm25_score_docs_fielded, BM25Config
+
+# Single body-only BM25 config, reused across all calls
+_BM25_BODY_ONLY = BM25Config(
+    boost_title=0.0,
+    boost_body=1.0,
+    b_title=0.0,
+)
 
 
 def parse_query_terms(query: str) -> list[str]:
@@ -72,18 +78,17 @@ def phrase_match_indicator(doc_id: int, query_terms: Sequence[str], postings_by_
     return 1
 
 
-@lru_cache(maxsize=200_000)
-def _cached_title_terms(inverted_index, doc_id: int) -> tuple[str, ...]:
+def _get_title_terms(inverted_index, doc_id: int) -> tuple[str, ...]:
     title = inverted_index.doc_store.get_title_only(int(doc_id))
     if not title:
-        return tuple()
+        return ()
     terms = normalize_search_query(title)
     drop = {"AND", "OR", "NOT", "&", "|", "-", "(", ")"}
     return tuple(t for t in terms if t not in drop)
 
 
 def in_title_indicator(inverted_index, doc_id: int, query_terms: Sequence[str]) -> int:
-    title_terms = set(_cached_title_terms(inverted_index, int(doc_id)))
+    title_terms = set(_get_title_terms(inverted_index, int(doc_id)))
     for t in query_terms:
         if t in title_terms:
             return 1
@@ -92,7 +97,7 @@ def in_title_indicator(inverted_index, doc_id: int, query_terms: Sequence[str]) 
 
 def title_tf(inverted_index, doc_id: int, term: str) -> int:
     # used by BM25 scorer; based on cached title terms
-    return int(_cached_title_terms(inverted_index, int(doc_id)).count(term))
+    return int(_get_title_terms(inverted_index, int(doc_id)).count(term))
 
 
 @dataclass(frozen=True)
@@ -120,18 +125,6 @@ def compute_features_for_doc(
     query_terms: Sequence[str],
     postings_by_term: Mapping[str, PostingList],
 ) -> FeatureVector:
-    # BM25: compute body-only by setting title boost=0
-    cfg = BM25Config(
-        boost_title=0.0,
-        boost_body=1.0,
-        b_title=0.0,            # irrelevant since boost_title=0
-        b_body=BM25Config().b_body,
-        k1=BM25Config().k1,
-        idf_threshold=BM25Config().idf_threshold,
-        clamp_negative_idf=BM25Config().clamp_negative_idf,
-        min_terms_after_threshold=BM25Config().min_terms_after_threshold,
-    )
-
     scores = bm25_score_docs_fielded(
         list(query_terms),
         postings_by_term=postings_by_term,
@@ -142,7 +135,7 @@ def compute_features_for_doc(
         get_title_len=lambda d: int(inverted_index.metadata.get_title_length(int(d))),
         get_body_len=lambda d: int(inverted_index.metadata.get_body_length(int(d))),
         get_title_tf=lambda d, t: int(title_tf(inverted_index, int(d), str(t))),
-        cfg=cfg,
+        cfg=_BM25_BODY_ONLY,
     )
     bm25_body = float(scores.get(int(doc_id), 0.0))
 

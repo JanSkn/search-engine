@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import random
 from pathlib import Path
@@ -285,6 +286,11 @@ def main() -> None:
                 f_val.write(s + "\n")
             else:
                 f_test.write(s + "\n")
+
+            del row, s
+
+            if written % 500 == 0:
+                gc.collect()
 
     finally:
         f_train.close()
