@@ -16,17 +16,10 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-
-# -----------------------------
-# Config
-# -----------------------------
-DEFAULT_FEATURE_ORDER = [
-    "bm25_body",
-    "matched_terms",
-    "matched_frac",
-    "phrase_match",
-    "in_title",
-]
+from backend.search_engine.ltr.model import (
+    TinyLTRModel,
+    DEFAULT_FEATURE_ORDER,
+)
 
 
 @dataclass
@@ -170,70 +163,7 @@ def ndcg_at_k(scores: torch.Tensor, labels: torch.Tensor, mask: torch.Tensor, k:
 
 
 # -----------------------------
-# Model: normalization INSIDE model
-# -----------------------------
-class FeatureNormalizer(nn.Module):
-    """
-    Stores mean/std as buffers -> saved with model -> identical at serving time.
-    This directly addresses "normalization must be reproducible at serving time". :contentReference[oaicite:7]{index=7}
-    """
-
-    def __init__(self, num_features: int, eps: float = 1e-6, clip_z: float = 8.0):
-        super().__init__()
-        self.eps = eps
-        self.clip_z = clip_z
-        self.register_buffer("mean", torch.zeros(num_features))
-        self.register_buffer("std", torch.ones(num_features))
-
-    def fit(self, x_all: torch.Tensor):
-        """
-        x_all: (N, F) over ALL training docs (flattened)
-        """
-        mean = x_all.mean(dim=0)
-        std = x_all.std(dim=0, unbiased=False).clamp_min(self.eps)
-        self.mean.copy_(mean)
-        self.std.copy_(std)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (..., F)
-        z = (x - self.mean) / self.std
-        if self.clip_z is not None:
-            z = torch.clamp(z, -self.clip_z, self.clip_z)
-        return z
-
-
-class TinyLTRModel(nn.Module):
-    """
-    Lightweight per-doc scoring model (pointwise scoring, listwise loss).
-    """
-
-    def __init__(self, num_features: int, hidden: int = 16, dropout: float = 0.1):
-        super().__init__()
-        self.norm = FeatureNormalizer(num_features=num_features)
-
-        self.mlp = nn.Sequential(
-            nn.Linear(num_features, hidden),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden, 1),
-        )
-
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """
-        x: (B, L, F)
-        mask: (B, L) bool
-        returns scores: (B, L)
-        """
-        x = self.norm(x)
-        s = self.mlp(x).squeeze(-1)  # (B, L)
-
-        # mask out padded docs -> very negative
-        s = s.masked_fill(~mask, -1e9)
-        return s
-
-
-# -----------------------------
-# Loss: Listwise Softmax Loss (slides)
+# Loss: Listwise Softmax Loss
 # -----------------------------
 def listwise_softmax_loss(scores: torch.Tensor, labels: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """
@@ -303,8 +233,9 @@ def main():
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--grad_clip", type=float, default=1.0)
 
-    ap.add_argument("--logdir", type=str, default="runs/ltr")
-    ap.add_argument("--out", type=str, default="ltr_model.pt")
+    _script_dir = Path(__file__).resolve().parent
+    ap.add_argument("--logdir", type=str, default=str(_script_dir / "output" / "runs"))
+    ap.add_argument("--out", type=str, default=str(_script_dir / "output" / "ltr_model.pt"))
 
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -338,6 +269,7 @@ def main():
     global_step = 0
     best_val = -1.0
     best_path = Path(args.out)
+    best_path.parent.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, args.epochs + 1):
         model.train()

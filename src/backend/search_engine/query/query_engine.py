@@ -26,6 +26,13 @@ from backend.search_engine.query.query_preprocessing import (
 from backend.search_engine.error_handling import InvalidOperatorError
 from backend.logging_config import get_logger
 
+try:
+    from backend.search_engine.ltr import reranker as _ltr_module
+    _LTR_AVAILABLE = True
+except ImportError:
+    _ltr_module = None  # type: ignore[assignment]
+    _LTR_AVAILABLE = False
+
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
 from backend.search_engine.spell_correction.spell_correction import repl
 
@@ -340,7 +347,7 @@ class QueryEngine:
     # -----------------
     # Main
     # -----------------
-    def search_results(self, limit: int = 10) -> SearchResults:
+    def search_results(self, limit: int = 100) -> SearchResults:
         start = time.perf_counter()
         logger.debug("Starting query execution (efficient top-k)")
 
@@ -517,6 +524,16 @@ class QueryEngine:
             key=lambda x: x[1],
         )
         logger.debug(f"Ranking sort time: {time.perf_counter() - t_sort:.6f}s")
+
+        # 4b) LTR re-ranking
+        if _LTR_AVAILABLE and _ltr_module is not None:
+            try:
+                t_ltr = time.perf_counter()
+                reranker = _ltr_module.get_reranker()
+                ranked_top = reranker.rerank(ranked_top, raw_query, self.inverted_index)
+                logger.debug(f"LTR rerank time: {time.perf_counter() - t_ltr:.6f}s")
+            except Exception as e:
+                logger.warning(f"LTR reranking failed, using BM25 ranking: {e}")
 
         # 5) build results (doc_store.get triggers snippet ONLY for top-k, that's fine)
         t_top = time.perf_counter()
