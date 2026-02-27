@@ -316,6 +316,9 @@ class DocStore {
     std::string get_snippet(uint32_t doc_id, uint64_t tsv_offset);
     std::optional<DocInfo> get(uint32_t doc_id);
     std::optional<uint64_t> get_tsv_offset(uint32_t doc_id);
+
+    std::optional<std::string> get_title_only(uint32_t doc_id);
+
     uint32_t size() const { return total_docs; }
 };
 
@@ -368,6 +371,12 @@ class InvertedIndex {
 
         metadata.load(base_path + "/metadata.bin");
         doc_store.open(base_path);
+    }
+
+    std::optional<uint32_t> get_docfreq(const std::string& term) const {
+        auto it = term_to_docfreq.find(term);
+        if (it == term_to_docfreq.end()) return std::nullopt;
+        return it->second;
     }
 
     friend class DocStore;
@@ -731,6 +740,32 @@ std::optional<DocInfo> DocStore::get(
     std::string snippet = get_snippet(doc_id, tsv_offset);
     return DocInfo{url, title, snippet};
 }
+
+std::optional<std::string> DocStore::get_title_only(uint32_t doc_id) {
+    auto it = offsets.find(doc_id);
+    if (it == offsets.end()) return std::nullopt;
+
+    uint64_t docstore_offset = it->second.docstore_offset;
+    data_in.clear();
+    data_in.seekg(docstore_offset);
+
+    uint32_t url_len;
+    data_in.read(reinterpret_cast<char*>(&url_len), sizeof(url_len));
+    if (!data_in) return std::nullopt;
+
+    // skip url bytes
+    data_in.seekg(static_cast<std::streamoff>(url_len), std::ios::cur);
+
+    uint32_t title_len;
+    data_in.read(reinterpret_cast<char*>(&title_len), sizeof(title_len));
+    if (!data_in) return std::nullopt;
+
+    std::string title(title_len, '\0');
+    data_in.read(title.data(), title_len);
+    if (!data_in) return std::nullopt;
+
+    return ensure_utf8(title);
+}
 // --------------------
 
 std::optional<PostingList> IndexAccessor::get(const std::string& term) {
@@ -1010,6 +1045,7 @@ PYBIND11_MODULE(_core, m) {
     py::class_<DocStore>(m, "DocStore")
         .def("get", &DocStore::get, py::arg("doc_id"))
         .def("get_tsv_offset", &DocStore::get_tsv_offset, py::arg("doc_id"))
+        .def("get_title_only", &DocStore::get_title_only, py::arg("doc_id"))
         .def_readwrite("query_terms", &DocStore::query_terms);
 
     py::class_<IndexAccessor>(m, "IndexAccessor").def("get", &IndexAccessor::get, py::arg("term"));
@@ -1019,5 +1055,6 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("index", &InvertedIndex::index)
         .def_readonly("metadata", &InvertedIndex::metadata)
         .def_readonly("doc_store", &InvertedIndex::doc_store)
-        .def("clear_cache", &InvertedIndex::clear_cache);
+        .def("clear_cache", &InvertedIndex::clear_cache)
+        .def("get_docfreq", &InvertedIndex::get_docfreq, py::arg("term"));
 }
