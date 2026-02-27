@@ -373,6 +373,12 @@ class InvertedIndex {
         doc_store.open(base_path);
     }
 
+    std::optional<uint32_t> get_docfreq(const std::string& term) const {
+        auto it = term_to_docfreq.find(term);
+        if (it == term_to_docfreq.end()) return std::nullopt;
+        return it->second;
+    }
+
     friend class DocStore;
     friend class IndexAccessor;
 };
@@ -1049,5 +1055,6 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("index", &InvertedIndex::index)
         .def_readonly("metadata", &InvertedIndex::metadata)
         .def_readonly("doc_store", &InvertedIndex::doc_store)
-        .def("clear_cache", &InvertedIndex::clear_cache);
+        .def("clear_cache", &InvertedIndex::clear_cache)
+        .def("get_docfreq", &InvertedIndex::get_docfreq, py::arg("term"));
 }
