@@ -22,7 +22,7 @@ class SemanticSearcher:
         results = list(zip(ids[0], scores[0]))
 
         logger.debug(
-            f"Search found {len(results)} results in {time.perf_counter() - start:.4f}s"
+            f"Semantic search found {len(results)} results in {time.perf_counter() - start:.4f}s"
         )
 
         return results

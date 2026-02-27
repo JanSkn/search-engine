@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -211,6 +212,28 @@ struct PostingList {
     }
 };
 
+PostingList filter_posting_list(const PostingList* pl,
+                                const std::unordered_set<uint32_t>& allowed) {
+    PostingList result;
+    if (pl == nullptr) return result;
+
+    for (uint32_t doc_id : pl->postings) {
+        if (allowed.count(doc_id)) {
+            result.postings.push_back(doc_id);
+            auto tf_it = pl->term_frequencies.find(doc_id);
+            if (tf_it != pl->term_frequencies.end()) {
+                result.term_frequencies[doc_id] = tf_it->second;
+            }
+            auto pos_it = pl->positions.find(doc_id);
+            if (pos_it != pl->positions.end()) {
+                result.positions[doc_id] = pos_it->second;
+            }
+        }
+    }
+    result.build_skip_pointers();
+    return result;
+}
+
 PostingList read_posting_list(std::ifstream& in, uint64_t offset, uint32_t doc_freq) {
     PostingList pl;
     pl.doc_frequency = doc_freq;
@@ -316,6 +339,9 @@ class DocStore {
     std::string get_snippet(uint32_t doc_id, uint64_t tsv_offset);
     std::optional<DocInfo> get(uint32_t doc_id);
     std::optional<uint64_t> get_tsv_offset(uint32_t doc_id);
+
+    std::optional<std::string> get_title_only(uint32_t doc_id);
+
     uint32_t size() const { return total_docs; }
 };
 
@@ -369,6 +395,25 @@ class InvertedIndex {
         metadata.load(base_path + "/metadata.bin");
         doc_store.open(base_path);
     }
+
+    std::optional<uint32_t> get_docfreq(const std::string& term) const {
+        auto it = term_to_docfreq.find(term);
+        if (it == term_to_docfreq.end()) return std::nullopt;
+        return it->second;
+    }
+
+    PostingList positional_phrase_search(const std::vector<std::string>& terms,
+                                         const std::unordered_set<uint32_t>& allowed);
+
+    PostingList bool_search(py::object node, const std::vector<uint32_t>& cand_list);
+
+    std::unordered_map<uint32_t, double> bm25_score_fielded(
+        const std::vector<std::string>& query_terms,
+        const std::vector<uint32_t>& candidate_doc_ids,
+        double k1, double boost_title, double boost_body,
+        double b_title, double b_body,
+        double idf_threshold, bool clamp_negative_idf,
+        int min_terms_after_threshold);
 
     friend class DocStore;
     friend class IndexAccessor;
@@ -731,6 +776,32 @@ std::optional<DocInfo> DocStore::get(
     std::string snippet = get_snippet(doc_id, tsv_offset);
     return DocInfo{url, title, snippet};
 }
+
+std::optional<std::string> DocStore::get_title_only(uint32_t doc_id) {
+    auto it = offsets.find(doc_id);
+    if (it == offsets.end()) return std::nullopt;
+
+    uint64_t docstore_offset = it->second.docstore_offset;
+    data_in.clear();
+    data_in.seekg(docstore_offset);
+
+    uint32_t url_len;
+    data_in.read(reinterpret_cast<char*>(&url_len), sizeof(url_len));
+    if (!data_in) return std::nullopt;
+
+    // skip url bytes
+    data_in.seekg(static_cast<std::streamoff>(url_len), std::ios::cur);
+
+    uint32_t title_len;
+    data_in.read(reinterpret_cast<char*>(&title_len), sizeof(title_len));
+    if (!data_in) return std::nullopt;
+
+    std::string title(title_len, '\0');
+    data_in.read(title.data(), title_len);
+    if (!data_in) return std::nullopt;
+
+    return ensure_utf8(title);
+}
 // --------------------
 
 std::optional<PostingList> IndexAccessor::get(const std::string& term) {
@@ -838,6 +909,242 @@ PostingList positional_intersect(const PostingList& pl1, const PostingList& pl2,
     // Skip pointers for result
     result.build_skip_pointers();
     return result;
+}
+
+PostingList InvertedIndex::positional_phrase_search(
+    const std::vector<std::string>& terms,
+    const std::unordered_set<uint32_t>& allowed) {
+    if (terms.empty()) {
+        return PostingList();
+    }
+
+    auto first_opt = index.get(terms[0]);
+    PostingList result = filter_posting_list(
+        first_opt ? &*first_opt : nullptr, allowed);
+
+    if (result.postings.empty()) {
+        return PostingList();
+    }
+
+    for (size_t i = 1; i < terms.size(); ++i) {
+        auto next_opt = index.get(terms[i]);
+        PostingList next_pl = filter_posting_list(
+            next_opt ? &*next_opt : nullptr, allowed);
+
+        if (next_pl.postings.empty()) {
+            // warm the cache for remaining terms (needed for snippet generation)
+            for (size_t j = i + 1; j < terms.size(); ++j) {
+                index.get(terms[j]);
+            }
+            return PostingList();
+        }
+
+        result = positional_intersect(result, next_pl, static_cast<uint32_t>(i));
+
+        if (result.postings.empty()) {
+            for (size_t j = i + 1; j < terms.size(); ++j) {
+                index.get(terms[j]);
+            }
+            break;
+        }
+    }
+
+    return result;
+}
+
+PostingList bool_op_postings(const PostingList& left, const PostingList& right,
+                             const std::string& op) {
+    std::unordered_set<uint32_t> rset(right.postings.begin(), right.postings.end());
+
+    std::vector<uint32_t> out;
+
+    if (op == "AND") {
+        for (uint32_t d : left.postings) {
+            if (rset.count(d)) out.push_back(d);
+        }
+    } else if (op == "OR") {
+        std::unordered_set<uint32_t> lset(left.postings.begin(), left.postings.end());
+        out = left.postings;
+        for (uint32_t d : right.postings) {
+            if (!lset.count(d)) out.push_back(d);
+        }
+    } else if (op == "NOT") {
+        for (uint32_t d : left.postings) {
+            if (!rset.count(d)) out.push_back(d);
+        }
+    }
+
+    std::sort(out.begin(), out.end());
+    PostingList result;
+    result.postings = std::move(out);
+    return result;
+}
+
+PostingList InvertedIndex::bool_search(py::object node,
+                                       const std::vector<uint32_t>& cand_list) {
+    if (node.is_none()) return PostingList();
+
+    std::string value = node.attr("value").cast<std::string>();
+
+    // leaf node (actual term, not an operator)
+    if (value != "AND" && value != "OR" && value != "NOT") {
+        auto pl_opt = index.get(value);
+        if (!pl_opt) return PostingList();
+
+        const auto& tf_map = pl_opt->term_frequencies;
+        std::vector<uint32_t> out;
+        out.reserve(cand_list.size());
+        for (uint32_t d : cand_list) {
+            if (tf_map.count(d)) out.push_back(d);
+        }
+        PostingList result;
+        result.postings = std::move(out);
+        return result;
+    }
+
+    py::object py_left = node.attr("left");
+    py::object py_right = node.attr("right");
+
+    if (value == "AND") {
+        bool left_is_not = !py_left.is_none() &&
+                           py_left.attr("value").cast<std::string>() == "NOT";
+        bool right_is_not = !py_right.is_none() &&
+                            py_right.attr("value").cast<std::string>() == "NOT";
+
+        if (left_is_not) {
+            PostingList not_docs = bool_search(
+                py_left.is_none() ? py::none() : py_left.attr("right"), cand_list);
+            PostingList right_result = bool_search(py_right, cand_list);
+            return bool_op_postings(right_result, not_docs, "NOT");
+        }
+        if (right_is_not) {
+            PostingList left_result = bool_search(py_left, cand_list);
+            PostingList not_docs = bool_search(
+                py_right.is_none() ? py::none() : py_right.attr("right"), cand_list);
+            return bool_op_postings(left_result, not_docs, "NOT");
+        }
+
+        PostingList left_result = bool_search(py_left, cand_list);
+        PostingList right_result = bool_search(py_right, cand_list);
+        return bool_op_postings(left_result, right_result, "AND");
+    }
+
+    // OR
+    PostingList left_result = bool_search(py_left, cand_list);
+    PostingList right_result = bool_search(py_right, cand_list);
+    return bool_op_postings(left_result, right_result, "OR");
+}
+
+inline double bm25_idf_cpp(uint32_t num_docs, uint32_t df, bool clamp_negative) {
+    if (num_docs == 0 || df == 0) return 0.0;
+    double val = std::log(
+        (static_cast<double>(num_docs) - df + 0.5) / (df + 0.5));
+    if (clamp_negative && val < 0.0) return 0.0;
+    return val;
+}
+
+inline double field_norm_tf(int tf, int field_len, double avg_field_len, double b_f) {
+    if (tf <= 0) return 0.0;
+    if (avg_field_len <= 0.0) avg_field_len = 1.0;
+    if (field_len <= 0) field_len = 1;
+    double denom = (1.0 - b_f) + b_f * (static_cast<double>(field_len) / avg_field_len);
+    if (denom <= 0.0) return static_cast<double>(tf);
+    return static_cast<double>(tf) / denom;
+}
+
+std::unordered_map<uint32_t, double> InvertedIndex::bm25_score_fielded(
+    const std::vector<std::string>& query_terms,
+    const std::vector<uint32_t>& candidate_doc_ids,
+    double k1, double boost_title, double boost_body,
+    double b_title, double b_body,
+    double idf_threshold, bool clamp_negative_idf,
+    int min_terms_after_threshold) {
+
+    uint32_t num_docs = metadata.num_docs;
+    double avg_title_len = metadata.avg_title_length;
+    double avg_body_len = metadata.avg_body_length;
+    double k1p1 = k1 + 1.0;
+
+    std::vector<std::pair<std::string, double>> term_idf_all;
+    term_idf_all.reserve(query_terms.size());
+    for (const auto& t : query_terms) {
+        auto df_opt = get_docfreq(t);
+        if (!df_opt) continue;
+        double idf = bm25_idf_cpp(num_docs, *df_opt, clamp_negative_idf);
+        term_idf_all.push_back({t, idf});
+    }
+    std::sort(term_idf_all.begin(), term_idf_all.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    // threshold filtering
+    std::vector<std::pair<std::string, double>> term_idf;
+    for (const auto& [t, idf] : term_idf_all) {
+        if (idf >= idf_threshold) term_idf.push_back({t, idf});
+    }
+    int min_keep = std::max(1, min_terms_after_threshold);
+    if (static_cast<int>(term_idf.size()) < min_keep) {
+        term_idf.clear();
+        for (int i = 0; i < min_keep && i < static_cast<int>(term_idf_all.size()); ++i) {
+            term_idf.push_back(term_idf_all[i]);
+        }
+    }
+
+    std::unordered_set<std::string> qterm_set(query_terms.begin(), query_terms.end());
+    std::unordered_map<uint32_t, std::unordered_map<std::string, uint32_t>> title_tf_cache;
+
+    auto get_title_tf = [&](uint32_t doc_id, const std::string& term) -> int {
+        auto cache_it = title_tf_cache.find(doc_id);
+        if (cache_it == title_tf_cache.end()) {
+            auto title_opt = doc_store.get_title_only(doc_id);
+            std::string title = title_opt.value_or("");
+            auto toks = normalize_search_query(title);
+            std::unordered_map<std::string, uint32_t> counts;
+            for (const auto& tok : toks) {
+                if (qterm_set.count(tok)) counts[tok]++;
+            }
+            auto [inserted_it, _] = title_tf_cache.emplace(doc_id, std::move(counts));
+            cache_it = inserted_it;
+        }
+        auto term_it = cache_it->second.find(term);
+        return term_it != cache_it->second.end() ? static_cast<int>(term_it->second) : 0;
+    };
+
+    std::unordered_map<uint32_t, double> scores;
+    scores.reserve(candidate_doc_ids.size());
+    for (uint32_t d : candidate_doc_ids) {
+        scores[d] = 0.0;
+    }
+
+    for (const auto& [t, idf] : term_idf) {
+        auto pl_opt = index.get(t);
+        if (!pl_opt) continue;
+
+        const auto& tf_body_map = pl_opt->term_frequencies;
+
+        for (uint32_t d : candidate_doc_ids) {
+            auto tf_it = tf_body_map.find(d);
+            if (tf_it == tf_body_map.end() || tf_it->second == 0) continue;
+
+            int tf_body = static_cast<int>(tf_it->second);
+            int tf_title = get_title_tf(d, t);
+
+            double tf_norm =
+                boost_title * field_norm_tf(
+                    tf_title,
+                    static_cast<int>(metadata.get_title_length(d)),
+                    avg_title_len, b_title) +
+                boost_body * field_norm_tf(
+                    tf_body,
+                    static_cast<int>(metadata.get_body_length(d)),
+                    avg_body_len, b_body);
+
+            if (tf_norm <= 0.0) continue;
+
+            scores[d] += idf * (tf_norm * k1p1 / (tf_norm + k1));
+        }
+    }
+
+    return scores;
 }
 
 PostingList find_docs(const PostingList& pl1, const PostingList& pl2, const std::string& mode) {
@@ -1010,6 +1317,7 @@ PYBIND11_MODULE(_core, m) {
     py::class_<DocStore>(m, "DocStore")
         .def("get", &DocStore::get, py::arg("doc_id"))
         .def("get_tsv_offset", &DocStore::get_tsv_offset, py::arg("doc_id"))
+        .def("get_title_only", &DocStore::get_title_only, py::arg("doc_id"))
         .def_readwrite("query_terms", &DocStore::query_terms);
 
     py::class_<IndexAccessor>(m, "IndexAccessor").def("get", &IndexAccessor::get, py::arg("term"));
@@ -1019,5 +1327,19 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("index", &InvertedIndex::index)
         .def_readonly("metadata", &InvertedIndex::metadata)
         .def_readonly("doc_store", &InvertedIndex::doc_store)
-        .def("clear_cache", &InvertedIndex::clear_cache);
+        .def("clear_cache", &InvertedIndex::clear_cache)
+        .def("get_docfreq", &InvertedIndex::get_docfreq, py::arg("term"))
+        .def("positional_phrase_search", &InvertedIndex::positional_phrase_search,
+             py::arg("terms"), py::arg("allowed"),
+             "Positional phrase search: intersect terms at consecutive positions, filtered by allowed doc IDs")
+        .def("bool_search", &InvertedIndex::bool_search,
+             py::arg("node"), py::arg("cand_list"),
+             "Recursive boolean search on a query tree Node, filtered by candidate doc IDs")
+        .def("bm25_score_fielded", &InvertedIndex::bm25_score_fielded,
+             py::arg("query_terms"), py::arg("candidate_doc_ids"),
+             py::arg("k1"), py::arg("boost_title"), py::arg("boost_body"),
+             py::arg("b_title"), py::arg("b_body"),
+             py::arg("idf_threshold"), py::arg("clamp_negative_idf"),
+             py::arg("min_terms_after_threshold"),
+             "Fielded BM25 scoring");
 }

@@ -14,7 +14,7 @@ from backend.search_engine.semantic_search.embedding_model import (
 )
 from backend.search_engine.semantic_search.train_vector_index import train_or_load_ivfpq
 from backend.search_engine.spell_correction.spell_corrector import get_spell_corrector
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
 setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -56,16 +56,26 @@ async def search(
     limit: Annotated[
         int, Query(ge=1, le=500, description="Maximum number of results")
     ] = 10,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> SearchResults:
-    if app.state.inverted_index is None or app.state.spell_corrector is None:
+    if (
+        app.state.inverted_index is None
+        or app.state.spell_corrector is None
+        or app.state.embedding_model is None
+        or app.state.vector_index is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Search index or spell corrector not loaded",
+            detail="One or more models not loaded",
         )
 
     try:
         qe = QueryEngine(q)
         results = qe.search_results(limit)
+
+        background_tasks.add_task(
+            qe.inverted_index.clear_cache
+        )  # clear snippet cache to reduce memory consumption
 
         return results
     except InvalidOperatorError as e:
