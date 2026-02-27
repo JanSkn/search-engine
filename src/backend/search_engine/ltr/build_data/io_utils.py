@@ -152,8 +152,9 @@ def load_top100_selection(
             line = line.rstrip("\n")
             if not line:
                 continue
-            parts = line.split("\t")
-            if len(parts) < 3:
+            # TREC format: qid Q0 docid rank score run_tag (space-separated)
+            parts = line.split()
+            if len(parts) < 4:
                 continue
             try:
                 qid = int(parts[0])
@@ -162,8 +163,8 @@ def load_top100_selection(
             if qid not in qids:
                 continue
 
-            docid_s = parts[1]
-            rank_s = parts[2]
+            docid_s = parts[2]
+            rank_s = parts[3]
 
             if not docid_s.startswith("D"):
                 continue
