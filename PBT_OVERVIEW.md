@@ -169,6 +169,7 @@ Every one of these was found by the fuzzer and shrunk to a minimal trigger.
 - **There is no oracle for ranking quality.** PBT checks *structural* truths: sorted,
   deterministic, bounded, order-independent. It cannot tell whether the results are
   relevant.
+- **More C++ logic.** There are more core functions in the C++ utils that we can't test here because they have no binding.
 
 ---
 
