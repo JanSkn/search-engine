@@ -66,3 +66,8 @@ mypy:
 
 test:
     just -f src/backend/tests/justfile test
+
+# --hypothesis-show-statistics -W ignore
+
+pbt *args:
+    cd src/backend &&  uv run pytest tests/test_property_based.py {{args}}
