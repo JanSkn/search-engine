@@ -37,13 +37,13 @@ C++; orchestration, parsing, and fusion are Python. The interface is pybind11 (P
   │ 3. Parse      │   AND / OR / NOT / "quoted phrase"
   └───────┬───────┘
           ▼
-  ┌───────────────┐   pick the most distinctive terms,
+  ┌───────────────┐   pick the most distinctive terms (highest IDF),
   │ 4. Candidates │   gather a bounded set of docs to score
   └───────┬───────┘
           ▼
   ┌───────────────────────────┐
-  │ 5. Lexical retrieval + BM25│  boolean match + fielded BM25   (C++)
-  │ 6. Semantic search         │  embed query, ANN lookup        (vectors)
+  │ 5. Lexical retrieval + BM25│  boolean/phrase match + fielded BM25   (C++)
+  │ 6. Semantic search         │  embed query, ANN lookup               (vectors)
   └───────────────┬───────────┘
                   ▼
   ┌───────────────┐   Reciprocal Rank Fusion — merge the two
@@ -54,6 +54,28 @@ C++; orchestration, parsing, and fusion are Python. The interface is pybind11 (P
   │ 8. Present    │   (C++ snippet generator)
   └───────────────┘
 ```
+
+**Step 4 — Candidates (what IDF does).** Scoring every one of the ~3M documents
+per query is far too expensive, so we first cheaply narrow the field. For each
+query term we compute its **IDF** (inverse document frequency):
+
+```
+idf = ln((N - df + 0.5) / (df + 0.5))     N = corpus size, df = docs containing the term
+```
+
+A high IDF means the term is **rare**, hence **distinctive**: it separates
+relevant docs from the rest. A low IDF means the term is common. We keep only the few
+highest-IDF terms and collect a bounded candidate set of
+document IDs from *their* posting lists. This is a cheap pre-filter to later work
+ on a small set instead of the whole index.
+
+**Step 5 — Fielded BM25 (what it does).** BM25 is the classic lexical relevance
+score: for each candidate doc it rewards **term frequency** (how often the query
+terms appear), dampened by a saturation term so repeats matter less and less, and
+weights each term by its **IDF** (rare terms count more). It also normalizes for
+**document length** so long documents don't win just by being long. *Fielded*
+means the title and the body are scored **separately and then combined with
+different weights**
 
 **Two phases overall:**
 
