@@ -297,3 +297,190 @@ class TestFindingsProperties:
         out = QueryEngine._reciprocal_rank_fusion([single_list], top_n=50, k=60)
         for _, score in out:
             assert score <= 1 / 61 + 1e-12  # + 1e-12 is rounding buffer
+
+
+# QUERY TREE (parser) - structural + semantic properties
+
+_OPS = {"AND", "OR", "NOT"}
+
+
+def _ser(node) -> object:
+    """Serialize a Node tree to nested tuples; a leaf becomes its bare value."""
+    if node is None:
+        return None
+    if node.left is None and node.right is None:
+        return node.value
+    return (node.value, _ser(node.left), _ser(node.right))
+
+
+def _leaves(node) -> list[str]:
+    """In-order list of leaf (term) values."""
+    if node is None:
+        return []
+    if node.left is None and node.right is None:
+        return [node.value]
+    return _leaves(node.left) + _leaves(node.right)
+
+
+def _is_wellformed(node) -> bool:
+    """AND/OR nodes need two children; leaves are non-operator terms."""
+    if node is None:
+        return False
+    is_leaf = node.left is None and node.right is None
+    if is_leaf:
+        return node.value not in _OPS
+    if node.value in {"AND", "OR"}:
+        return (
+            node.left is not None
+            and node.right is not None
+            and _is_wellformed(node.left)
+            and _is_wellformed(node.right)
+        )
+    return False  # terms_and_ops_tokens produces no NOT/parens
+
+
+def _ref_precedence_tree(tokens: list[str]) -> object:
+    """Reference parser with STANDARD boolean precedence: AND binds tighter
+    than OR, left-associative. Expects a well-formed `term (OP term)*` list."""
+    pos = 0
+
+    def parse_and() -> object:
+        nonlocal pos
+        node: object = tokens[pos]
+        pos += 1
+        while pos < len(tokens) and tokens[pos] == "AND":
+            pos += 1
+            right = tokens[pos]
+            pos += 1
+            node = ("AND", node, right)
+        return node
+
+    def parse_or() -> object:
+        nonlocal pos
+        node = parse_and()
+        while pos < len(tokens) and tokens[pos] == "OR":
+            pos += 1
+            node = ("OR", node, parse_and())
+        return node
+
+    return parse_or()
+
+
+@st.composite
+def aliased_query(draw):
+    """The same query written with word operators and with symbol aliases."""
+    n = draw(st.integers(min_value=1, max_value=5))
+    terms = draw(st.lists(lower_word, min_size=n, max_size=n))
+    pairs = draw(
+        st.lists(
+            st.sampled_from([("AND", "&"), ("OR", "|")]),
+            min_size=n - 1,
+            max_size=n - 1,
+        )
+    )
+    word: list[str] = []
+    symbol: list[str] = []
+    for i, term in enumerate(terms):
+        word.append(term)
+        symbol.append(term)
+        if i < len(pairs):
+            word.append(pairs[i][0])
+            symbol.append(pairs[i][1])
+    return word, symbol
+
+
+# NOT used anywhere other than as the right child of an AND is illegal.
+not_misuse_tokens = st.one_of(
+    st.builds(lambda b: ["NOT", b], lower_word),  # bare NOT
+    st.builds(lambda a, b: [a, "OR", "NOT", b], lower_word, lower_word),  # OR + NOT
+)
+
+
+class TestQueryTree:
+    #  invariants
+
+    @settings(max_examples=300)
+    @given(terms_and_ops_tokens())
+    def test_tree_is_wellformed(self, tokens: list[str]) -> None:
+        qt = QueryTree()
+        qt.parse_query(list(tokens))
+        assert _is_wellformed(qt.root)
+
+    @settings(max_examples=300)
+    @given(terms_and_ops_tokens())
+    def test_leaves_conserve_terms_in_order(self, tokens: list[str]) -> None:
+        # The parser neither invents, drops, nor reorders terms.
+        qt = QueryTree()
+        qt.parse_query(list(tokens))
+        assert _leaves(qt.root) == [t for t in tokens if t not in _OPS]
+
+    @settings(max_examples=300)
+    @given(terms_and_ops_tokens())
+    def test_parse_is_deterministic(self, tokens: list[str]) -> None:
+        a, b = QueryTree(), QueryTree()
+        a.parse_query(list(tokens))
+        b.parse_query(list(tokens))
+        assert _ser(a.root) == _ser(b.root)
+
+    @settings(max_examples=300)
+    @given(terms_and_ops_tokens())
+    def test_has_operators_matches_tree_shape(self, tokens: list[str]) -> None:
+        qt = QueryTree()
+        qt.parse_query(list(tokens))
+        root_is_operator = qt.root is not None and (
+            qt.root.left is not None or qt.root.right is not None
+        )
+        assert QueryTree._has_operators(tokens) == root_is_operator
+
+    @settings(max_examples=300)
+    @given(not_misuse_tokens)
+    def test_not_misuse_always_raises(self, tokens: list[str]) -> None:
+        # NOT outside of an AND must always be a controlled InvalidOperatorError.
+        qt = QueryTree()
+        with pytest.raises(InvalidOperatorError):
+            qt.parse_query(list(tokens))
+
+    #  metamorphic
+
+    @settings(max_examples=300)
+    @given(aliased_query())
+    def test_operator_alias_equivalence(self, queries) -> None:
+        # '&' == 'AND', '|' == 'OR' (CONNECTOR_MAPPING) -> identical trees.
+        word, symbol = queries
+        qw, qs = QueryTree(), QueryTree()
+        qw.parse_query(list(word))
+        qs.parse_query(list(symbol))
+        assert _ser(qw.root) == _ser(qs.root)
+
+    @settings(max_examples=300)
+    @given(terms_and_ops_tokens())
+    def test_redundant_parens_are_transparent(self, tokens: list[str]) -> None:
+        # Wrapping the whole query in one pair of parentheses must not change it.
+        plain, wrapped = QueryTree(), QueryTree()
+        plain.parse_query(list(tokens))
+        wrapped.parse_query(["("] + list(tokens) + [")"])
+        assert _ser(plain.root) == _ser(wrapped.root)
+
+    @settings(max_examples=300)
+    @given(lower_word, lower_word)
+    def test_negated_terms_excluded_from_unique_terms(self, a: str, b: str) -> None:
+        # `a AND NOT b` -> only the positive term `a` is collected for snippeting.
+        if a == b:
+            return  # same string appears positively; not a meaningful case
+        qt = QueryTree()
+        qt.parse_query([a, "AND", "NOT", b])
+        assert a in qt.unique_terms and b not in qt.unique_terms
+
+    # @pytest.mark.xfail(
+    #     strict=True, reason="parser has NO operator precedence: 'a OR b AND c'"
+    #     " parses as '(a OR b) AND c' instead of 'a OR (b AND c)'"
+    # )
+    @settings(max_examples=300)
+    @given(terms_and_ops_tokens())
+    def test_parser_respects_operator_precedence(self, tokens: list[str]) -> None:
+        # AND should bind tighter than OR. The parser instead chains strictly
+        # left-to-right, so any 'OR ... AND' sequence yields a different tree.
+        qt = QueryTree()
+        qt.parse_query(list(tokens))
+        print(qt)
+        assert _ser(qt.root) == _ref_precedence_tree(tokens)

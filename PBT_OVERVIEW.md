@@ -156,6 +156,10 @@ Every one of these was found by the fuzzer and shrunk to a minimal trigger.
   400 (bad request).
 - **A stray closing parenthesis leaks in as a search term.**
 - **The parser mutates its input list** as a side effect (it empties it).
+- **Query tree operator binding if no explicit parenthesis** `['x', 'OR', 'y', 'AND', 'z']` 
+  - parsed to `(AND (OR x y) z)` = `((x OR y) AND Z)` because parser reads from left to right
+  - should be `(OR x (AND y z))` = `(x OR (y AND z))` because `AND` is stronger than `OR`
+  - not captured despite extensive unit tests
 
 ### Scoring
 - **BM25's IDF crashes on impossible input.** When document frequency exceeds the corpus
